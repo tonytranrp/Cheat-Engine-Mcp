@@ -49,15 +49,15 @@ Before the attach fast path and backend-management fix:
 
 After the fix:
 
-- total runtime: `20445.765 ms`
-- `_run_native_tools`: `544.295 ms`
-- `_run_structure_and_dissect_tools`: `4007.983 ms`
-- `_run_debug_tools`: `2606.225 ms`
-- `run_pointer_chain_string_smoke`: `1603.813 ms`
+- total runtime: `20520.912 ms`
+- `_run_native_tools`: `824.019 ms`
+- `_run_structure_and_dissect_tools`: `3299.802 ms`
+- `_run_debug_tools`: `3258.803 ms`
+- `run_pointer_chain_string_smoke`: `1530.367 ms`
 - `ce.attach_process` timing inside the suite:
   - count: `18`
-  - average: `131.017 ms`
-  - max: `709.44 ms`
+  - average: `162.03 ms`
+  - max: `743.156 ms`
 
 ### Focused benchmark run
 
@@ -69,19 +69,19 @@ py -3 .\tools\dev\benchmark-live-tools.py --process-name "Minecraft.Windows.exe"
 
 Results from the live benchmark pass:
 
-- `ce.attach_process(same target)`: avg `20.541 ms`, max `26.683 ms`
-- `ce.verify_target`: avg `13.738 ms`
-- `ce.normalize_address`: avg `1.689 ms`
-- `ce.read_integer`: avg `1.29 ms`
-- `ce.read_bytes_table`: avg `1.363 ms`
-- `ce.lua_eval`: avg `0.952 ms`
-- `ce.lua_call(readInteger)`: avg `0.884 ms`
-- `ce.lua_eval_with_globals`: avg `1.438 ms`
-- `ce.structure_read`: avg `5.061 ms`
-- `ce.scan_once`: avg `52.643 ms`
+- `ce.attach_process(same target)`: avg `16.102 ms`, max `17.515 ms`
+- `ce.verify_target`: avg `12.507 ms`
+- `ce.normalize_address`: avg `1.503 ms`
+- `ce.read_integer`: avg `1.106 ms`
+- `ce.read_bytes_table`: avg `1.09 ms`
+- `ce.lua_eval`: avg `1.116 ms`
+- `ce.lua_call(readInteger)`: avg `1.118 ms`
+- `ce.lua_eval_with_globals`: avg `1.36 ms`
+- `ce.structure_read`: avg `4.123 ms`
+- `ce.scan_once`: avg `49.405 ms`
 - `parallel_mixed_light` with `18` calls across `6` workers:
-  - per-call avg `6.134 ms`
-  - wall time `21.929 ms`
+  - per-call avg `5.324 ms`
+  - wall time `19.854 ms`
 
 ## New Dev Commands
 
