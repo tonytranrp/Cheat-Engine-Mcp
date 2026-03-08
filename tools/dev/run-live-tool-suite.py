@@ -15,19 +15,27 @@ if str(PYTHON_SRC) not in sys.path:
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
+from live_runner_support import managed_bridge_backend
 from live_support import run_live_tool_suite
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the live Cheat Engine MCP tool suite.")
+    parser.add_argument("--port", type=int, default=5556, help="Bridge port to use for the temporary live suite listener.")
     parser.add_argument(
         "--process-name",
         default=None,
         help="Primary target process name for live attach checks. Defaults to CE_MCP_PRIMARY_PROCESS or Minecraft.Windows.exe.",
     )
+    parser.add_argument(
+        "--manage-existing-backend",
+        action="store_true",
+        help="Temporarily stop an existing ce_mcp_server listener on this port, run the live suite, then restart it.",
+    )
     args = parser.parse_args()
 
-    summary = run_live_tool_suite(primary_process_name=args.process_name)
+    with managed_bridge_backend(REPO_ROOT, port=args.port, manage_existing_backend=args.manage_existing_backend):
+        summary = run_live_tool_suite(primary_process_name=args.process_name, port=args.port)
     print(json.dumps(summary, indent=2))
     return 0
 

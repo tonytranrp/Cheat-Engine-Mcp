@@ -1,6 +1,6 @@
 # Live Usage Review 2026-03-08
 
-This document records the real issues found during live use against `Tic-tak-toe.exe`, and the changes shipped in `0.2.4` and `0.2.5` to close them.
+This document records the real issues found during live use against `Tic-tak-toe.exe`, and the changes shipped in `0.2.4`, `0.2.5`, and `0.2.6` to close them.
 
 ## Fixed In 0.2.4
 
@@ -132,4 +132,4 @@ Validated in the repo after the `0.2.5` pass:
 
 ## Status
 
-This review is now the shipped-fix record for the `0.2.4` and `0.2.5` releases.
+This review is now the shipped-fix record for the `0.2.4` and `0.2.5` releases. The Minecraft-focused follow-up for `0.2.6` is documented in `docs/MINECRAFT_LIVE_AUDIT_2026-03-08.md`.

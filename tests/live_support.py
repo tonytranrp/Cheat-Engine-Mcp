@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import shutil
+import statistics
 import subprocess
 import tempfile
 import time
@@ -20,6 +21,7 @@ from test_support import FakeServer
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOTNET_TARGET_PROJECT = REPO_ROOT / "tests" / "assets" / "dotnet_target" / "DotNetTarget.csproj"
 DOTNET_TARGET_DLL = REPO_ROOT / "tests" / "assets" / "dotnet_target" / "bin" / "Release" / "net8.0" / "DotNetTarget.dll"
+DOTNET_TARGET_BUILT = False
 
 
 @dataclass(slots=True)
@@ -80,6 +82,14 @@ class DotNetTarget:
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait(timeout=5)
+
+
+def ensure_dotnet_target_built() -> None:
+    global DOTNET_TARGET_BUILT
+    if DOTNET_TARGET_BUILT:
+        return
+    DotNetTarget.build()
+    DOTNET_TARGET_BUILT = True
 
 
 @dataclass(slots=True)
@@ -147,6 +157,7 @@ class LiveToolSuite:
         self.lua_preload_file_path = self.temp_dir / "ce_live_preload.lua"
         self.auto_attach_original: list[str] = []
         self.invoked: set[str] = set()
+        self.call_timings_ms: dict[str, list[float]] = {}
 
     def start(self) -> None:
         register_all(self.server, self.context)
@@ -237,7 +248,10 @@ class LiveToolSuite:
         signature = inspect.signature(function)
         if "session_id" in signature.parameters and "session_id" not in kwargs and self.session_id is not None:
             kwargs["session_id"] = self.session_id
+        started_at = time.perf_counter()
         result = function(**kwargs)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        self.call_timings_ms.setdefault(tool_name, []).append(elapsed_ms)
         self.invoked.add(tool_name)
         if isinstance(result, dict) and result.get("ok") is False:
             raise AssertionError(f"{tool_name} failed: {json.dumps(result, indent=2)}")
@@ -572,12 +586,14 @@ return { base = base }
         self._call("ce.lua_add_package_cpath", path=str(self.lua_module_root / "?.dll"), prepend=True)
         self._call("ce.lua_remove_package_cpath", path=str(self.lua_module_root / "?.dll"))
         self._call("ce.lua_add_library_root", path=str(self.lua_module_root), prepend=True)
+        self._call("ce.lua_remove_library_root", path=str(self.lua_module_root))
         self._call(
             "ce.lua_configure_environment",
             library_roots=[str(self.lua_module_root)],
             package_paths=[str(self.lua_module_root / "?.lua")],
             package_cpaths=[str(self.lua_module_root / "?.dll")],
             prepend=True,
+            reset_managed=True,
         )
         self._call("ce.lua_preload_module", module_name=self.lua_preload_module_name, script="local M = {}; function M.answer() return 21 end; return M", force_reload=True)
         self._call("ce.lua_list_preloaded_modules")
@@ -592,6 +608,7 @@ return { base = base }
         self._call("ce.lua_list_loaded_modules")
         self._call("ce.lua_unload_module", module_name=self.lua_module_name)
         self._call("ce.lua_unload_module", module_name=self.lua_preload_file_module_name)
+        self._call("ce.lua_reset_environment")
         self._call("ce.lua_run_file", path=str(self.lua_script_path))
 
     def _run_scan_tools(self) -> None:
@@ -885,7 +902,7 @@ return { base = base }
             include_raw=True,
         )
 
-        DotNetTarget.build()
+        ensure_dotnet_target_built()
         self.dotnet_target = DotNetTarget.start()
         self._call("ce.attach_process", process_id=self.dotnet_target.pid)
         self._call("ce.structure_create", name=self.dotnet_structure_name, add_global=True)
@@ -912,7 +929,7 @@ return { base = base }
 
     def _run_debug_tools(self) -> None:
         if self.dotnet_target is None:
-            DotNetTarget.build()
+            ensure_dotnet_target_built()
             self.dotnet_target = DotNetTarget.start()
         self._call("ce.attach_process", process_id=self.dotnet_target.pid)
         self._call("ce.debug_status")
@@ -941,8 +958,8 @@ return { base = base }
             raise AssertionError("live suite did not invoke every registered tool:\n" + "\n".join(missing))
 
 
-def run_pointer_chain_string_smoke(primary_process_name: str | None = None) -> None:
-    bridge = CheatEngineBridge(host="127.0.0.1", port=5556)
+def run_pointer_chain_string_smoke(primary_process_name: str | None = None, *, port: int = 5556) -> None:
+    bridge = CheatEngineBridge(host="127.0.0.1", port=port)
     bridge.start()
     try:
         deadline = time.time() + 20.0
@@ -983,7 +1000,7 @@ def run_pointer_chain_string_smoke(primary_process_name: str | None = None) -> N
         bridge.stop()
 
 
-def run_live_tool_suite(*, primary_process_name: str | None = None) -> dict[str, Any]:
+def run_live_tool_suite(*, primary_process_name: str | None = None, port: int = 5556) -> dict[str, Any]:
     group_methods = [
         ["_run_native_tools", "_run_exported_tools", "_run_address_tools", "_run_process_tools"],
         ["_run_pointer_tools"],
@@ -995,10 +1012,13 @@ def run_live_tool_suite(*, primary_process_name: str | None = None) -> dict[str,
 
     aggregate_invoked: set[str] = set()
     all_tools: set[str] | None = None
+    aggregate_timings_ms: dict[str, list[float]] = {}
+    phase_timings_ms: dict[str, float] = {}
     summary: dict[str, Any] = {}
+    suite_started_at = time.perf_counter()
 
     for methods in group_methods:
-        suite = LiveToolSuite(primary_process_name=primary_process_name)
+        suite = LiveToolSuite(port=port, primary_process_name=primary_process_name)
         suite.start()
         try:
             if all_tools is None:
@@ -1010,23 +1030,70 @@ def run_live_tool_suite(*, primary_process_name: str | None = None) -> dict[str,
                     "primary_module_base": suite.primary_module_base,
                 }
             for method_name in methods:
+                phase_started_at = time.perf_counter()
                 getattr(suite, method_name)()
+                phase_timings_ms[method_name] = round((time.perf_counter() - phase_started_at) * 1000.0, 3)
         finally:
             suite.stop()
             aggregate_invoked.update(suite.invoked)
+            for tool_name, samples in suite.call_timings_ms.items():
+                aggregate_timings_ms.setdefault(tool_name, []).extend(samples)
 
     assert all_tools is not None
-    run_pointer_chain_string_smoke(primary_process_name=primary_process_name)
+    pointer_started_at = time.perf_counter()
+    run_pointer_chain_string_smoke(primary_process_name=primary_process_name, port=port)
+    phase_timings_ms["run_pointer_chain_string_smoke"] = round((time.perf_counter() - pointer_started_at) * 1000.0, 3)
     aggregate_invoked.add("ce.read_pointer_chain_string")
 
     missing = sorted(all_tools - aggregate_invoked)
     if missing:
         raise AssertionError("live suite did not invoke every registered tool:\n" + "\n".join(missing))
 
+    duration_ms_total = round((time.perf_counter() - suite_started_at) * 1000.0, 3)
+    tool_timings_ms = summarize_tool_timings(aggregate_timings_ms)
     summary.update({
         "ok": True,
         "tool_count": len(all_tools),
         "invoked_count": len(aggregate_invoked),
         "invoked_tools": sorted(aggregate_invoked),
+        "duration_ms_total": duration_ms_total,
+        "phase_timings_ms": phase_timings_ms,
+        "tool_timings_ms": tool_timings_ms,
+        "slowest_tools_by_avg_ms": select_slowest_tools(tool_timings_ms),
     })
     return summary
+
+
+def summarize_tool_timings(tool_timings_ms: dict[str, list[float]]) -> dict[str, dict[str, float | int]]:
+    summary: dict[str, dict[str, float | int]] = {}
+    for tool_name, samples in sorted(tool_timings_ms.items()):
+        if not samples:
+            continue
+        ordered = sorted(samples)
+        count = len(ordered)
+        summary[tool_name] = {
+            "count": count,
+            "min_ms": round(ordered[0], 3),
+            "avg_ms": round(statistics.fmean(ordered), 3),
+            "p50_ms": round(ordered[(count - 1) // 2], 3),
+            "max_ms": round(ordered[-1], 3),
+            "total_ms": round(sum(ordered), 3),
+        }
+    return summary
+
+
+def select_slowest_tools(tool_timings_ms: dict[str, dict[str, float | int]], limit: int = 12) -> list[dict[str, float | int | str]]:
+    ranked = sorted(
+        (
+            {
+                "tool_name": tool_name,
+                "avg_ms": float(stats["avg_ms"]),
+                "max_ms": float(stats["max_ms"]),
+                "count": int(stats["count"]),
+            }
+            for tool_name, stats in tool_timings_ms.items()
+        ),
+        key=lambda item: item["avg_ms"],
+        reverse=True,
+    )
+    return ranked[:limit]

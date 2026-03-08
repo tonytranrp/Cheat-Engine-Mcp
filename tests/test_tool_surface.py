@@ -37,6 +37,8 @@ class ToolSurfaceTests(unittest.TestCase):
             "ce.scan_once",
             "ce.lua_get_environment",
             "ce.lua_configure_environment",
+            "ce.lua_remove_library_root",
+            "ce.lua_reset_environment",
             "ce.lua_preload_module",
             "ce.lua_preload_file",
             "ce.lua_eval_with_globals",
@@ -92,6 +94,10 @@ class ToolSurfaceTests(unittest.TestCase):
     def test_lua_eval_with_globals_wraps_temp_globals(self) -> None:
         result = self.server.tools["ce.lua_eval_with_globals"](script="player_name", globals={"player_name": "Alex"}, session_id="ce-test")
         self.assertIn("player_name", result["value"])
+
+    def test_lua_reset_environment_exists(self) -> None:
+        result = self.server.tools["ce.lua_reset_environment"](session_id="ce-test")
+        self.assertTrue(result["reset"])
 
 
 if __name__ == "__main__":

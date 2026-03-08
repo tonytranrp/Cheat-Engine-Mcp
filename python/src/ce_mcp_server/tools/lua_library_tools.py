@@ -75,6 +75,15 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
         ),
         runtime_tool(
             ctx,
+            name="ce.lua_remove_library_root",
+            description="Remove a library root that was previously exposed through root/?.lua, root/?/init.lua, and root/?.dll entries.",
+            runtime=LUA_RUNTIME,
+            function_name="remove_library_root",
+            parameters=(ParameterSpec("path", str),),
+            arg_builder=lambda path: [str(Path(path))],
+        ),
+        runtime_tool(
+            ctx,
             name="ce.lua_configure_environment",
             description="Batch-configure Lua library roots, package.path entries, and package.cpath entries in one call.",
             runtime=LUA_RUNTIME,
@@ -84,13 +93,23 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 ParameterSpec("package_paths", list[str], []),
                 ParameterSpec("package_cpaths", list[str], []),
                 ParameterSpec("prepend", bool, False),
+                ParameterSpec("reset_managed", bool, False),
             ),
-            arg_builder=lambda library_roots=None, package_paths=None, package_cpaths=None, prepend=False: [
+            arg_builder=lambda library_roots=None, package_paths=None, package_cpaths=None, prepend=False, reset_managed=False: [
                 [str(Path(path)) for path in (library_roots or [])],
                 [str(Path(path)) for path in (package_paths or [])],
                 [str(Path(path)) for path in (package_cpaths or [])],
                 prepend,
+                reset_managed,
             ],
+        ),
+        runtime_tool(
+            ctx,
+            name="ce.lua_reset_environment",
+            description="Remove Lua package.path and package.cpath entries that were previously added through ce.lua_configure_environment.",
+            runtime=LUA_RUNTIME,
+            function_name="reset_environment",
+            parameters=(),
         ),
         runtime_tool(
             ctx,

@@ -37,10 +37,22 @@ For development validation, the live suite can target a custom process instead o
 py -3 .\tools\dev\run-live-tool-suite.py --process-name "Tic-tak-toe.exe"
 ```
 
+If the normal backend is already listening on `5556`, let the script stop and restart it for the run:
+
+```powershell
+py -3 .\tools\dev\run-live-tool-suite.py --process-name "Minecraft.Windows.exe" --manage-existing-backend
+```
+
 You can also set:
 
 ```powershell
 $env:CE_MCP_PRIMARY_PROCESS = "Tic-tak-toe.exe"
+```
+
+Benchmark the same target with timing summaries:
+
+```powershell
+py -3 .\tools\dev\benchmark-live-tools.py --process-name "Minecraft.Windows.exe" --manage-existing-backend
 ```
 
 ### List loaded modules from the current target
@@ -240,7 +252,8 @@ ce.lua_configure_environment(
 Important:
 
 - `ce.lua_add_library_root` expands to Lua `package.path` and `package.cpath` conventions, but it does not remove stale entries
-- use `ce.lua_remove_package_path` and `ce.lua_remove_package_cpath` when cleaning up a polluted session
+- use `ce.lua_remove_library_root`, `ce.lua_remove_package_path`, and `ce.lua_remove_package_cpath` when cleaning up a polluted session
+- use `ce.lua_reset_environment` to remove paths previously added through `ce.lua_configure_environment`
 - `ce.lua_preload_module` and `ce.lua_preload_file` bypass path lookup entirely and are the fastest option for controlled module injection
 
 ### Repeated Lua/runtime calls feel slower than expected after editing the backend

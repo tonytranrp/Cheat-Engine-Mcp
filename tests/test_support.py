@@ -272,9 +272,22 @@ class FakeToolContext:
                     "loaded_modules": ["sample_module"],
                     "preloaded_modules": ["sample_preload"],
                     "searcher_count": 4,
+                    "managed_path_entries": ["./?.lua"],
+                    "managed_cpath_entries": ["./?.dll"],
+                    "configured_library_roots": ["C:/tmp"],
                 }
-            if function_name in {"add_package_path", "add_package_cpath", "add_library_root", "remove_package_path", "remove_package_cpath"}:
-                return {"ok": True, "changed": True, "path": "./?.lua", "cpath": "./?.dll", "path_entries": ["./?.lua"], "cpath_entries": ["./?.dll"]}
+            if function_name in {"add_package_path", "add_package_cpath", "add_library_root", "remove_package_path", "remove_package_cpath", "remove_library_root"}:
+                return {
+                    "ok": True,
+                    "changed": True,
+                    "path": "./?.lua",
+                    "cpath": "./?.dll",
+                    "path_entries": ["./?.lua"],
+                    "cpath_entries": ["./?.dll"],
+                    "configured_library_roots": ["C:/tmp"],
+                    "managed_path_entries": ["./?.lua"],
+                    "managed_cpath_entries": ["./?.dll"],
+                }
             if function_name == "configure_environment":
                 return {
                     "ok": True,
@@ -287,7 +300,26 @@ class FakeToolContext:
                     "preloaded_modules": ["sample_preload"],
                     "searcher_count": 4,
                     "configured_library_roots": ["C:/tmp"],
+                    "managed_path_entries": ["./?.lua"],
+                    "managed_cpath_entries": ["./?.dll"],
                     "prepend": True,
+                    "reset_managed": True,
+                }
+            if function_name == "reset_environment":
+                return {
+                    "ok": True,
+                    "lua_version": "Lua 5.x",
+                    "path": "",
+                    "cpath": "",
+                    "path_entries": [],
+                    "cpath_entries": [],
+                    "loaded_modules": ["sample_module"],
+                    "preloaded_modules": ["sample_preload"],
+                    "searcher_count": 4,
+                    "configured_library_roots": [],
+                    "managed_path_entries": [],
+                    "managed_cpath_entries": [],
+                    "reset": True,
                 }
             if function_name == "require_module":
                 return {"ok": True, "module_name": "sample_module", "loaded": True, "value_type": "table", "value": {"answer": 42}}
@@ -477,11 +509,14 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
         overrides["path"] = str(script_path)
     if tool_name == "ce.lua_add_library_root":
         overrides["path"] = str(temp_dir)
+    if tool_name == "ce.lua_remove_library_root":
+        overrides["path"] = str(temp_dir)
     if tool_name == "ce.lua_configure_environment":
         overrides["library_roots"] = [str(temp_dir)]
         overrides["package_paths"] = [str(temp_dir / "?.lua")]
         overrides["package_cpaths"] = [str(temp_dir / "?.dll")]
         overrides["prepend"] = True
+        overrides["reset_managed"] = True
     if tool_name in {"ce.lua_preload_file", "ce.run_script_file", "ce.lua_run_file"}:
         overrides["path"] = str(script_path)
     if tool_name in {"ce.lua_require_module", "ce.lua_unload_module", "ce.lua_call_module_function"}:

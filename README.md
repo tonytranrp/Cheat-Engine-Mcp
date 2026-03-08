@@ -17,14 +17,14 @@ It gives Codex a live Cheat Engine backend for process attach, memory access, po
   - `ce.auto_assemble`
   - `ce.lua_call`
 - Broad MCP surface
-  - 200+ MCP tools currently registered
+  - 210+ MCP tools currently registered
   - process, modules, symbols, memory, scans, pointer chains, tables, records, exported SDK fields
 - Raw SDK visibility
   - full copied `ExportedFunctions` block exposed through MCP metadata tools
 
-## What Changed In 0.2.5
+## What Changed In 0.2.6
 
-This release extends the real CE workflow beyond attach/memory fixes and into structure dumping, richer Lua library workflows, and lower per-call overhead inside the Python backend.
+This pass adds a Minecraft-backed live audit/benchmark workflow, new Lua environment cleanup helpers, and a native attach fast-path for already-attached targets.
 
 ### New API surface
 
@@ -33,8 +33,10 @@ This release extends the real CE workflow beyond attach/memory fixes and into st
 - New Lua environment and preload helpers:
   - `ce.lua_get_environment`
   - `ce.lua_configure_environment`
+  - `ce.lua_remove_library_root`
   - `ce.lua_remove_package_path`
   - `ce.lua_remove_package_cpath`
+  - `ce.lua_reset_environment`
   - `ce.lua_list_loaded_modules`
   - `ce.lua_list_preloaded_modules`
   - `ce.lua_preload_module`
@@ -47,15 +49,19 @@ This release extends the real CE workflow beyond attach/memory fixes and into st
 ### Fixes and behavior changes
 
 - The existing `ce.structure_*` and `ce.dissect_*` surface is now complemented by a direct instance reader so an address can be dumped as named fields after `ce.structure_define`, `ce.structure_auto_guess`, or `ce.structure_fill_from_dotnet`
-- The Lua runtime now supports batch environment configuration, source/file preloads, and explicit package-path removal in addition to the earlier single-entry add helpers
+- The Lua runtime now supports removing library roots and resetting paths that were added through `ce.lua_configure_environment`, which keeps repeated CE sessions from accumulating stale temp paths
 - `ce.lua_eval_with_globals` and `ce.lua_exec_with_globals` let callers inject temporary globals without permanently mutating `_G`
 - The Python backend now loads a lightweight CE-side dispatcher once per session and routes repeated runtime/global Lua calls through it, reducing repeated script boilerplate and improving steady-state latency
+- The native `ce.attach_process` path now short-circuits when Cheat Engine is already attached to the requested PID instead of forcing an unnecessary reopen
 
 ### Tooling and test improvements
 
 - Unit coverage now exercises `ce.structure_read` and globals-scoped Lua execution helpers
 - Live integration coverage now exercises the new structure dump path plus the expanded Lua package/preload workflow
 - The dev live suite can now target a custom primary process through `tools/dev/run-live-tool-suite.py --process-name ...` or `CE_MCP_PRIMARY_PROCESS`
+- `tools/dev/run-live-tool-suite.py --manage-existing-backend` now handles the normal `ce_mcp_server` listener conflict on port `5556`
+- `tools/dev/benchmark-live-tools.py` benchmarks repeated and mixed-parallel workflows against a live target
+- The live suite now records per-phase timings plus per-tool timing summaries so slow paths are visible immediately
 - Runtime module versions were bumped so updated helpers reload cleanly in existing CE sessions
 
 ### Repository layout
@@ -137,7 +143,7 @@ Codex
 
 ## Tool Surface
 
-Current registered MCP tool count: `208`
+Current registered MCP tool count: `210`
 
 ### Native bridge and session tools
 
@@ -182,7 +188,9 @@ Current registered MCP tool count: `208`
 - `ce.lua_add_package_cpath`
 - `ce.lua_remove_package_cpath`
 - `ce.lua_add_library_root`
+- `ce.lua_remove_library_root`
 - `ce.lua_configure_environment`
+- `ce.lua_reset_environment`
 - `ce.lua_require_module`
 - `ce.lua_unload_module`
 - `ce.lua_list_loaded_modules`
@@ -607,7 +615,13 @@ Live Cheat Engine integration suite:
 
 ```powershell
 $env:CE_MCP_RUN_LIVE = "1"
-py -3.14 tools\dev\run-live-tool-suite.py
+py -3.14 tools\dev\run-live-tool-suite.py --process-name "Minecraft.Windows.exe" --manage-existing-backend
+```
+
+Live benchmark runner:
+
+```powershell
+py -3.14 tools\dev\benchmark-live-tools.py --process-name "Minecraft.Windows.exe" --manage-existing-backend
 ```
 
 The live suite expects:
@@ -616,6 +630,10 @@ The live suite expects:
 - the stable loader plugin enabled
 - a live CE bridge session connected to the backend
 - an attachable target process for memory, scan, and debugger coverage
+
+Latest Minecraft audit:
+
+- [docs/MINECRAFT_LIVE_AUDIT_2026-03-08.md](docs/MINECRAFT_LIVE_AUDIT_2026-03-08.md)
 
 ## Troubleshooting
 

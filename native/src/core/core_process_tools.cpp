@@ -439,6 +439,12 @@ std::optional<std::uint64_t> CoreRuntime::Impl::parse_or_resolve_address(std::st
 
 std::optional<DWORD> CoreRuntime::Impl::attach_process(DWORD process_id) const
 {
+    const auto already_attached_process_id = current_attached_process_id();
+    if (already_attached_process_id && *already_attached_process_id == process_id)
+    {
+        return std::nullopt;
+    }
+
     if (exported_ == nullptr || exported_->openProcessEx == nullptr)
     {
         return ERROR_CALL_NOT_IMPLEMENTED;

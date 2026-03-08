@@ -1,6 +1,6 @@
 {
   "name": "cheat-engine-mcp",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "MCP server for Cheat Engine with a hot-reloadable CE plugin and a packaged Codex entrypoint",
   "bin": {
     "ce-mcp-server": "./bin/ce-mcp-server.js"

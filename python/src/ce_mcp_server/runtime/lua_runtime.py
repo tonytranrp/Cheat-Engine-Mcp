@@ -4,12 +4,17 @@ from ..context import RuntimeModule
 
 LUA_RUNTIME = RuntimeModule(
     name="lua",
-    version="2026.03.08.2",
+    version="2026.03.08.3",
     script=r'''
 _G.__ce_mcp = _G.__ce_mcp or {}
 _G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
 local root = _G.__ce_mcp
 root.lua = root.lua or {}
+root.lua_state = root.lua_state or {
+  managed_path_entries = {},
+  managed_cpath_entries = {},
+  configured_library_roots = {},
+}
 local M = root.lua
 
 local unpack_fn = table.unpack or unpack
@@ -31,13 +36,48 @@ local function split_paths(value)
   return entries
 end
 
+local function clone_entries(entries)
+  local result = {}
+  for _, value in ipairs(entries or {}) do
+    result[#result + 1] = tostring(value)
+  end
+  return result
+end
+
 local function has_entry(entries, target)
-  for _, current in ipairs(entries) do
+  for _, current in ipairs(entries or {}) do
     if current == target then
       return true
     end
   end
   return false
+end
+
+local function remember_entry(entries, entry)
+  local normalized = normalize_path(entry)
+  if not has_entry(entries, normalized) then
+    entries[#entries + 1] = normalized
+  end
+end
+
+local function forget_entry(entries, entry)
+  local normalized = normalize_path(entry)
+  local kept = {}
+  for _, current in ipairs(entries or {}) do
+    if current ~= normalized then
+      kept[#kept + 1] = current
+    end
+  end
+  return kept
+end
+
+local function get_state()
+  root.lua_state = root.lua_state or {
+    managed_path_entries = {},
+    managed_cpath_entries = {},
+    configured_library_roots = {},
+  }
+  return root.lua_state
 end
 
 local function add_entry(current_value, entry, prepend)
@@ -109,6 +149,7 @@ local function compile_source(script, chunk_name)
 end
 
 local function package_snapshot()
+  local state = get_state()
   return {
     lua_version = tostring(_VERSION or ''),
     path = package.path or '',
@@ -118,6 +159,9 @@ local function package_snapshot()
     loaded_modules = sorted_keys(package.loaded),
     preloaded_modules = sorted_keys(package.preload),
     searcher_count = get_searcher_count(),
+    managed_path_entries = clone_entries(state.managed_path_entries),
+    managed_cpath_entries = clone_entries(state.managed_cpath_entries),
+    configured_library_roots = clone_entries(state.configured_library_roots),
   }
 end
 
@@ -148,6 +192,10 @@ end
 function M.remove_package_path(path)
   local result = remove_entry(package.path or '', path)
   package.path = result.value
+  local state = get_state()
+  if result.changed then
+    state.managed_path_entries = forget_entry(state.managed_path_entries, result.entry)
+  end
   return {
     changed = result.changed,
     removed_path = result.entry,
@@ -170,6 +218,10 @@ end
 function M.remove_package_cpath(path)
   local result = remove_entry(package.cpath or '', path)
   package.cpath = result.value
+  local state = get_state()
+  if result.changed then
+    state.managed_cpath_entries = forget_entry(state.managed_cpath_entries, result.entry)
+  end
   return {
     changed = result.changed,
     removed_path = result.entry,
@@ -183,25 +235,92 @@ function M.add_library_root(root_path, prepend)
   M.add_package_path(root_path_normalized .. '/?.lua', prepend)
   M.add_package_path(root_path_normalized .. '/?/init.lua', prepend)
   M.add_package_cpath(root_path_normalized .. '/?.dll', prepend)
-  return M.get_package_paths()
+  local snapshot = package_snapshot()
+  snapshot.library_root = root_path_normalized
+  snapshot.prepend = prepend and true or false
+  return snapshot
 end
 
-function M.configure_environment(library_roots, package_paths, package_cpaths, prepend)
-  local normalized_roots = {}
-  for _, root_path in ipairs(library_roots or {}) do
-    normalized_roots[#normalized_roots + 1] = normalize_path(root_path)
-    M.add_library_root(root_path, prepend)
-  end
-  for _, path in ipairs(package_paths or {}) do
-    M.add_package_path(path, prepend)
-  end
-  for _, path in ipairs(package_cpaths or {}) do
-    M.add_package_cpath(path, prepend)
-  end
+function M.remove_library_root(root_path)
+  local root_path_normalized = normalize_path(root_path)
+  M.remove_package_path(root_path_normalized .. '/?.lua')
+  M.remove_package_path(root_path_normalized .. '/?/init.lua')
+  M.remove_package_cpath(root_path_normalized .. '/?.dll')
+
+  local state = get_state()
+  state.configured_library_roots = forget_entry(state.configured_library_roots, root_path_normalized)
 
   local snapshot = package_snapshot()
-  snapshot.configured_library_roots = normalized_roots
+  snapshot.library_root = root_path_normalized
+  return snapshot
+end
+
+function M.reset_environment()
+  local state = get_state()
+
+  for _, path in ipairs(clone_entries(state.managed_path_entries)) do
+    M.remove_package_path(path)
+  end
+  for _, path in ipairs(clone_entries(state.managed_cpath_entries)) do
+    M.remove_package_cpath(path)
+  end
+
+  state.managed_path_entries = {}
+  state.managed_cpath_entries = {}
+  state.configured_library_roots = {}
+
+  local snapshot = package_snapshot()
+  snapshot.reset = true
+  return snapshot
+end
+
+function M.configure_environment(library_roots, package_paths, package_cpaths, prepend, reset_managed)
+  if reset_managed then
+    M.reset_environment()
+  end
+
+  local state = get_state()
+  local normalized_roots = {}
+
+  for _, root_path in ipairs(library_roots or {}) do
+    local root_path_normalized = normalize_path(root_path)
+    normalized_roots[#normalized_roots + 1] = root_path_normalized
+
+    local path_one = M.add_package_path(root_path_normalized .. '/?.lua', prepend)
+    if path_one.changed then
+      remember_entry(state.managed_path_entries, path_one.added_path)
+    end
+
+    local path_two = M.add_package_path(root_path_normalized .. '/?/init.lua', prepend)
+    if path_two.changed then
+      remember_entry(state.managed_path_entries, path_two.added_path)
+    end
+
+    local cpath_one = M.add_package_cpath(root_path_normalized .. '/?.dll', prepend)
+    if cpath_one.changed then
+      remember_entry(state.managed_cpath_entries, cpath_one.added_path)
+    end
+  end
+
+  for _, path in ipairs(package_paths or {}) do
+    local result = M.add_package_path(path, prepend)
+    if result.changed then
+      remember_entry(state.managed_path_entries, result.added_path)
+    end
+  end
+
+  for _, path in ipairs(package_cpaths or {}) do
+    local result = M.add_package_cpath(path, prepend)
+    if result.changed then
+      remember_entry(state.managed_cpath_entries, result.added_path)
+    end
+  end
+
+  state.configured_library_roots = normalized_roots
+
+  local snapshot = package_snapshot()
   snapshot.prepend = prepend and true or false
+  snapshot.reset_managed = reset_managed and true or false
   return snapshot
 end
 
@@ -349,7 +468,7 @@ function M.call_module_function(module_name, function_name, args, force_reload)
   }
 end
 
-_G.__ce_mcp_modules["lua"] = "2026.03.08.2"
-return {ok = true, module = "lua", version = "2026.03.08.2"}
+_G.__ce_mcp_modules["lua"] = "2026.03.08.3"
+return {ok = true, module = "lua", version = "2026.03.08.3"}
 ''',
 )
