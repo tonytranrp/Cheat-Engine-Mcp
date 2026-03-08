@@ -46,14 +46,14 @@ class ToolContext:
                     tool_name: str,
                     payload: dict[str, Any] | None = None,
                     session_id: str | None = None,
-                    timeout_seconds: float = 10.0) -> dict[str, Any]:
+                    timeout_seconds: float = 30.0) -> dict[str, Any]:
         return self.get_bridge().call_tool(tool_name, payload=payload, session_id=session_id, timeout_seconds=timeout_seconds)
 
     def native_call_safe(self,
                          tool_name: str,
                          payload: dict[str, Any] | None = None,
                          session_id: str | None = None,
-                         timeout_seconds: float = 10.0) -> dict[str, Any]:
+                         timeout_seconds: float = 30.0) -> dict[str, Any]:
         try:
             return self.native_call(tool_name, payload=payload, session_id=session_id, timeout_seconds=timeout_seconds)
         except BridgeError as exc:
@@ -65,39 +65,50 @@ class ToolContext:
                            tool_name: str,
                            payload: dict[str, Any] | None = None,
                            session_id: str | None = None,
-                           timeout_seconds: float = 10.0) -> dict[str, Any]:
+                           timeout_seconds: float = 30.0) -> dict[str, Any]:
         result = self.native_call(tool_name, payload=payload, session_id=session_id, timeout_seconds=timeout_seconds)
         if result.get("ok") is not True:
             raise BridgeError(str(result.get("error", f"{tool_name} failed")))
         return result
 
-    def lua_eval(self, script: str, session_id: str | None = None) -> dict[str, Any]:
-        return self.native_call_safe("ce.lua_eval", payload={"script": script}, session_id=session_id)
+    def lua_eval(self,
+                 script: str,
+                 session_id: str | None = None,
+                 timeout_seconds: float = 30.0) -> dict[str, Any]:
+        return self.native_call_safe("ce.lua_eval", payload={"script": script}, session_id=session_id, timeout_seconds=timeout_seconds)
 
-    def lua_exec(self, script: str, session_id: str | None = None) -> dict[str, Any]:
-        return self.native_call_safe("ce.lua_exec", payload={"script": script}, session_id=session_id)
+    def lua_exec(self,
+                 script: str,
+                 session_id: str | None = None,
+                 timeout_seconds: float = 30.0) -> dict[str, Any]:
+        return self.native_call_safe("ce.lua_exec", payload={"script": script}, session_id=session_id, timeout_seconds=timeout_seconds)
 
-    def auto_assemble(self, script: str, session_id: str | None = None) -> dict[str, Any]:
-        return self.native_call_safe("ce.auto_assemble", payload={"script": script}, session_id=session_id)
+    def auto_assemble(self,
+                      script: str,
+                      session_id: str | None = None,
+                      timeout_seconds: float = 30.0) -> dict[str, Any]:
+        return self.native_call_safe("ce.auto_assemble", payload={"script": script}, session_id=session_id, timeout_seconds=timeout_seconds)
 
     def call_lua_function(self,
                           function_name: str,
                           args: list[Any] | tuple[Any, ...] | None = None,
                           session_id: str | None = None,
-                          result_field: str = "value") -> dict[str, Any]:
+                          result_field: str = "value",
+                          timeout_seconds: float = 30.0) -> dict[str, Any]:
         rendered_args = ", ".join(self.to_lua_literal(value) for value in (args or []))
         script = (
             f"local __ce_mcp_fn = rawget(_G, {self.to_lua_literal(function_name)})\n"
             f"if type(__ce_mcp_fn) ~= 'function' then error('missing_lua_function:{function_name}') end\n"
             f"return {{{result_field} = __ce_mcp_fn({rendered_args})}}"
         )
-        return self.lua_exec(script, session_id=session_id)
+        return self.lua_exec(script, session_id=session_id, timeout_seconds=timeout_seconds)
 
     def call_runtime_function(self,
                               runtime: RuntimeModule,
                               function_name: str,
                               args: list[Any] | tuple[Any, ...] | None = None,
-                              session_id: str | None = None) -> dict[str, Any]:
+                              session_id: str | None = None,
+                              timeout_seconds: float = 30.0) -> dict[str, Any]:
         resolved_session = self.resolve_session_id(session_id)
         try:
             self.ensure_runtime_module(runtime, resolved_session)
@@ -114,7 +125,7 @@ class ToolContext:
             f"if type(__ce_mcp_fn) ~= 'function' then error('ce_mcp_runtime_function_missing:{runtime.name}.{function_name}') end\n"
             f"return __ce_mcp_fn({rendered_args})"
         )
-        return self.lua_exec(script, session_id=resolved_session)
+        return self.lua_exec(script, session_id=resolved_session, timeout_seconds=timeout_seconds)
 
     def ensure_runtime_module(self, runtime: RuntimeModule, session_id: str) -> None:
         with self._runtime_lock:

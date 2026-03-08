@@ -15,12 +15,13 @@ def native_tool(ctx: ToolContext,
                 description: str,
                 bridge_tool: str,
                 parameters: list[ParameterSpec] | tuple[ParameterSpec, ...] = (),
-                payload_builder=None) -> ToolSpec:
+                payload_builder=None,
+                timeout_seconds: float = 30.0) -> ToolSpec:
     def handler(**kwargs):
         session_id = kwargs.pop("session_id", None)
         payload = payload_builder(**kwargs) if payload_builder is not None else dict(kwargs)
         payload = {key: value for key, value in payload.items() if value is not None}
-        return ctx.native_call_safe(bridge_tool, payload=payload or None, session_id=session_id)
+        return ctx.native_call_safe(bridge_tool, payload=payload or None, session_id=session_id, timeout_seconds=timeout_seconds)
 
     return ToolSpec(
         name=name,
@@ -37,11 +38,12 @@ def lua_function_tool(ctx: ToolContext,
                       function_name: str,
                       parameters: list[ParameterSpec] | tuple[ParameterSpec, ...],
                       arg_builder=None,
-                      result_field: str = "value") -> ToolSpec:
+                      result_field: str = "value",
+                      timeout_seconds: float = 30.0) -> ToolSpec:
     def handler(**kwargs):
         session_id = kwargs.pop("session_id", None)
         args = arg_builder(**kwargs) if arg_builder is not None else [kwargs[param.name] for param in parameters]
-        return ctx.call_lua_function(function_name, args=args, session_id=session_id, result_field=result_field)
+        return ctx.call_lua_function(function_name, args=args, session_id=session_id, result_field=result_field, timeout_seconds=timeout_seconds)
 
     return ToolSpec(
         name=name,
@@ -58,11 +60,12 @@ def runtime_tool(ctx: ToolContext,
                  runtime: RuntimeModule,
                  function_name: str,
                  parameters: list[ParameterSpec] | tuple[ParameterSpec, ...],
-                 arg_builder=None) -> ToolSpec:
+                 arg_builder=None,
+                 timeout_seconds: float = 30.0) -> ToolSpec:
     def handler(**kwargs):
         session_id = kwargs.pop("session_id", None)
         args = arg_builder(**kwargs) if arg_builder is not None else [kwargs[param.name] for param in parameters]
-        return ctx.call_runtime_function(runtime, function_name, args=args, session_id=session_id)
+        return ctx.call_runtime_function(runtime, function_name, args=args, session_id=session_id, timeout_seconds=timeout_seconds)
 
     return ToolSpec(
         name=name,
