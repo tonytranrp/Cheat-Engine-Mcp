@@ -22,38 +22,37 @@ It gives Codex a live Cheat Engine backend for process attach, memory access, po
 - Raw SDK visibility
   - full copied `ExportedFunctions` block exposed through MCP metadata tools
 
-## What Changed In 0.2.3
+## What Changed In 0.2.4
 
-This release is the current stabilized state after the recent MCP/backend refactor and live-tool hardening work.
+This release closes the live usage gaps found during real CE/IDA analysis work.
 
 ### New API surface
 
-- New scan-session state API:
-  - `ce.scan_get_state`
-- New Lua package/module APIs:
-  - `ce.lua_get_package_paths`
-  - `ce.lua_add_package_path`
-  - `ce.lua_add_package_cpath`
-  - `ce.lua_add_library_root`
-  - `ce.lua_require_module`
-  - `ce.lua_unload_module`
-  - `ce.lua_call_module_function`
-  - `ce.lua_run_file`
+- New address/target helpers:
+  - `ce.normalize_address`
+  - `ce.verify_target`
+- New bulk record helpers:
+  - `ce.record_create_many`
+  - `ce.record_create_group`
 
 ### Fixes and behavior changes
 
-- Invalid MCP operations now return structured error payloads instead of opaque one-line failures
-- Scan workflows now enforce order and report safe recovery steps for bad sequencing
-- Structure, dissect, and table helpers run on Cheat Engine's main thread where required
-- `ce.attach_process` is more reliable for name-based attach flows
-- `ce.scan_string` is the preferred text-search path instead of hand-building AOB hex for common string searches
+- Native raw-memory tools now accept CE expressions and registered symbols anywhere the Python surface already documented `int | str`
+  - `ce.query_memory`
+  - `ce.query_memory_map`
+  - `ce.aob_scan`
+  - `ce.read_memory`
+  - `ce.write_memory`
+- `ce.resolve_symbol(address=...)` now also accepts CE address expressions instead of only raw integers
+- Cheat-table record type normalization now accepts common CE UI labels such as `4 Bytes`, `8 Bytes`, `Byte Array`, and `Auto Assembler`
+- Record/runtime failures now return cleaner `invalid_record_type:*` and `record_not_found:*` messages instead of leaking raw Lua traceback noise
+- README and troubleshooting guidance now clarify that `ce.list_tools` reports only the native bridge subset, not the full Python-registered MCP surface
 
 ### Tooling and test improvements
 
-- Added live integration harness support in `tests/live_support.py`
-- Added `tools/dev/run-live-tool-suite.py` for grouped live MCP validation
-- Added a small managed `.NET` target under `tests/assets/dotnet_target/` for structure/dissect coverage
-- Added unit coverage for structured MCP error payloads and invalid scan/debug flows
+- Live integration coverage now exercises symbolic-address paths for native memory tools
+- Live integration coverage now exercises `ce.normalize_address`, `ce.verify_target`, `ce.record_create_many`, and `ce.record_create_group`
+- The table runtime version was bumped so updated helpers reload cleanly in existing CE sessions
 
 ### Repository layout
 
@@ -134,12 +133,16 @@ Codex
 
 ## Tool Surface
 
-Current registered MCP tool count: `192`
+Current registered MCP tool count: `196`
 
 ### Native bridge and session tools
 
+`ce.list_tools` reports the native plugin subset only. It does not enumerate the full runtime-backed MCP surface registered by the Python server.
+
 - `ce.bridge_status`
 - `ce.list_sessions`
+- `ce.normalize_address`
+- `ce.verify_target`
 - `ce.list_tools`
 - `ce.get_attached_process`
 - `ce.attach_process`
@@ -335,6 +338,8 @@ This is used for:
 - `ce.record_get_by_description`
 - `ce.record_find_all_by_description`
 - `ce.record_create`
+- `ce.record_create_many`
+- `ce.record_create_group`
 - `ce.record_delete`
 - `ce.record_set_description`
 - `ce.record_set_address`
@@ -439,6 +444,30 @@ ce.record_create(options={
   "address": "game.exe+123456",
   "type": "dword"
 })
+```
+
+Resolve and normalize an address expression before using it in a raw-memory workflow:
+
+```text
+ce.normalize_address(address="game.exe+123456")
+```
+
+Quick-check that the current CE session is attached to the expected target:
+
+```text
+ce.verify_target()
+```
+
+Create a grouped record layout in one call:
+
+```text
+ce.record_create_group(
+  description="Player",
+  records=[
+    {"description": "health", "address": "game.exe+123456", "type": "4 Bytes"},
+    {"description": "inventory_ptr", "address": "game.exe+123460", "type": "pointer"}
+  ]
+)
 ```
 
 ## One-Time Local Installation
@@ -553,4 +582,5 @@ Short version:
 - Cheat Engine side transport defaults to `127.0.0.1:5556`.
 - The raw exported-function catalog currently reports all copied fields, including undocumented `PVOID` entries.
 - Typed, safe wrappers are exposed as dedicated MCP tools. Raw pointer-only fields are exposed for inspection, not generic invocation.
+- `ce.list_tools` reports only the native bridge tools advertised by the plugin. Use the README tool-surface section or the Python registry for the full MCP list.
 - `ce.scan_new` exists but is not part of the recommended quick-start flow yet.

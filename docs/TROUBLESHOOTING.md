@@ -156,14 +156,21 @@ Fix:
 
 Check:
 
-1. `ce.get_attached_process`
-2. `ce.list_tools`
-3. `ce.bridge_status`
+1. `ce.verify_target`
+2. `ce.get_attached_process`
+3. `ce.list_tools`
+4. `ce.bridge_status`
+
+Important:
+
+- `ce.list_tools` only shows the native plugin tool subset
+- it does not include runtime-backed tools such as scans, pointers, tables, structures, or debug helpers registered by the Python MCP server
 
 If direct bridge calls work but Codex MCP calls fail:
 
 - the problem is in the MCP backend or Codex registration
 - the CE plugin is not the problem
+- from Codex or any MCP client, use `ce.verify_target` as the fastest full-stack sanity check
 
 ### AOB scans time out
 

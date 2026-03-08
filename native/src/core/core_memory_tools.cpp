@@ -14,7 +14,7 @@ std::string CoreRuntime::Impl::make_query_memory_response(std::string_view reque
         return make_error_response(request_id, "missing_address");
     }
 
-    const auto address = parse_unsigned_integer(*address_text);
+    const auto address = parse_or_resolve_address(*address_text);
     if (!address)
     {
         return make_error_response(request_id, "invalid_address");
@@ -89,7 +89,7 @@ std::string CoreRuntime::Impl::make_query_memory_map_response(std::string_view r
 
     if (const auto start_text = extract_simple_field(line, "start_address"))
     {
-        const auto start_address = parse_unsigned_integer(*start_text);
+        const auto start_address = parse_or_resolve_address(*start_text);
         if (!start_address)
         {
             return make_error_response(request_id, "invalid_start_address");
@@ -100,7 +100,7 @@ std::string CoreRuntime::Impl::make_query_memory_map_response(std::string_view r
 
     if (const auto end_text = extract_simple_field(line, "end_address"))
     {
-        const auto end_address = parse_unsigned_integer(*end_text);
+        const auto end_address = parse_or_resolve_address(*end_text);
         if (!end_address)
         {
             return make_error_response(request_id, "invalid_end_address");
@@ -213,7 +213,7 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
 
     if (const auto start_text = extract_simple_field(line, "start_address"))
     {
-        const auto start_address = parse_unsigned_integer(*start_text);
+        const auto start_address = parse_or_resolve_address(*start_text);
         if (!start_address)
         {
             return make_error_response(request_id, "invalid_start_address");
@@ -224,7 +224,7 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
 
     if (const auto end_text = extract_simple_field(line, "end_address"))
     {
-        const auto end_address = parse_unsigned_integer(*end_text);
+        const auto end_address = parse_or_resolve_address(*end_text);
         if (!end_address)
         {
             return make_error_response(request_id, "invalid_end_address");
@@ -316,7 +316,7 @@ std::string CoreRuntime::Impl::make_read_memory_response(std::string_view reques
         return make_error_response(request_id, "missing_address");
     }
 
-    const auto address = parse_unsigned_integer(*address_text);
+    const auto address = parse_or_resolve_address(*address_text);
     if (!address)
     {
         return make_error_response(request_id, "invalid_address");
@@ -379,7 +379,7 @@ std::string CoreRuntime::Impl::make_write_memory_response(std::string_view reque
         return make_error_response(request_id, "missing_address");
     }
 
-    const auto address = parse_unsigned_integer(*address_text);
+    const auto address = parse_or_resolve_address(*address_text);
     if (!address)
     {
         return make_error_response(request_id, "invalid_address");

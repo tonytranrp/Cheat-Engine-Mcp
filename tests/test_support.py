@@ -102,6 +102,16 @@ class FakeToolContext:
             return {"ok": True, "address": 0x140000000, "bytes_read": 16, "bytes_hex": "4D5A9000"}
         if tool_name == "ce.write_memory":
             return {"ok": True, "address": 0x140000000, "bytes_written": 1, "bytes_hex": "90"}
+        if tool_name == "ce.resolve_symbol":
+            if payload and "symbol" in payload:
+                return {"ok": True, "symbol": str(payload["symbol"]), "address": 0x140000000, "resolved_via": "ce_symbol"}
+            if payload and "address" in payload:
+                raw_address = payload["address"]
+                if isinstance(raw_address, str):
+                    resolved_address = 0x140000000 if raw_address == "game.exe+0" else 0x140000100
+                else:
+                    resolved_address = int(raw_address)
+                return {"ok": True, "symbol": "game.exe+0", "address": resolved_address, "resolved_via": "module_offset"}
         return {"ok": True, "tool_name": tool_name, "payload": payload or {}, "session_id": session_id or "ce-test"}
 
     def native_call(self,
@@ -409,6 +419,10 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
             {"offset": 0, "name": "health", "vartype": "dword", "bytesize": 4},
             {"offset": 4, "name": "armor", "vartype": "dword", "bytesize": 4},
         ],
+        "records": [
+            {"description": "health", "address": "game.exe+0", "type": "dword", "value": 100},
+            {"description": "armor", "address": "game.exe+4", "type": "4 Bytes", "value": 50},
+        ],
     }
 
     if tool_name == "ce.run_script_file":
@@ -428,6 +442,18 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
         overrides["elements"] = [{"offset": 0, "name": "health", "vartype": "dword", "bytesize": 4}]
     if tool_name == "ce.record_create":
         overrides["options"] = {"description": "health", "address": "game.exe+0", "type": "dword", "value": 100}
+    if tool_name == "ce.record_create_group":
+        overrides["description"] = "Player"
+        overrides["records"] = [
+            {"description": "health", "address": "game.exe+0", "type": "dword", "value": 100},
+            {"description": "armor", "address": "game.exe+4", "type": "4 Bytes", "value": 50},
+        ]
+        overrides["options"] = {"active": False}
+    if tool_name == "ce.record_create_many":
+        overrides["records"] = [
+            {"description": "health", "address": "game.exe+0", "type": "dword", "value": 100},
+            {"description": "armor", "address": "game.exe+4", "type": "4 Bytes", "value": 50},
+        ]
     if tool_name in {"ce.scan_first", "ce.scan_next"}:
         overrides["options"] = {"scan_option": "exact", "value_type": "dword", "input1": "100"}
     if tool_name == "ce.scan_string":

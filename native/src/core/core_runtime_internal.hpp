@@ -239,6 +239,7 @@ public:
     bool module_matches_name(const ModuleEntryInfo& module, std::string_view requested_name) const;
     std::optional<ModuleEntryInfo> find_module_by_name(std::string_view module_name) const;
     std::optional<std::pair<std::string, std::uint64_t>> parse_module_offset_symbol(std::string_view symbol) const;
+    std::optional<std::uint64_t> parse_or_resolve_address(std::string_view text) const;
     std::optional<DWORD> attach_process(DWORD process_id) const;
     std::optional<DWORD> detach_process() const;
     MemoryAccessContext open_attached_process(DWORD desired_access) const;

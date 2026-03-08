@@ -133,6 +133,7 @@ class LiveToolSuite:
         self.structure_names: list[str] = []
         self.general_record_id: int | None = None
         self.script_record_id: int | None = None
+        self.extra_record_ids: list[int] = []
         self.table_file_name = "ce_mcp_live_payload"
         self.table_save_path = self.temp_dir / "live_table.ct"
         self.table_export_path = self.temp_dir / "payload.bin"
@@ -158,6 +159,8 @@ class LiveToolSuite:
             if self.session_id is not None:
                 self._safe_call("ce.debug_watch_stop_all")
                 self._safe_call("ce.scan_destroy_all_sessions")
+                for record_id in reversed(self.extra_record_ids):
+                    self._safe_call("ce.record_delete", record_id=record_id)
                 if self.general_record_id is not None:
                     self._safe_call("ce.record_delete", record_id=self.general_record_id)
                 if self.script_record_id is not None:
@@ -379,35 +382,43 @@ return { base = base }
         return "{" + ", ".join(f"0x{value:02X}" for value in values) + "}"
     def _run_native_tools(self) -> None:
         assert self.remote_scratch is not None
+        scratch_symbol = "ce_mcp_native_scratch"
+        scratch_end_symbol = "ce_mcp_native_scratch_end"
         self._call("ce.bridge_status")
         self._call("ce.list_sessions")
+        self._call("ce.normalize_address", address=f"{self.primary_module_name}+0")
+        self._call("ce.verify_target")
         self._call("ce.list_tools")
         self._call("ce.get_attached_process")
         self._call("ce.attach_process", process_name=self.primary_process_name)
         self._call("ce.get_process_list", limit=8)
         self._call("ce.list_modules", limit=16)
         self._call("ce.list_modules_full")
-        self._call("ce.query_memory", address=self.remote_scratch.base)
+        self._call("ce.register_symbol", name=scratch_symbol, address=self.remote_scratch.pattern_address, donotsave=True)
+        self._call("ce.register_symbol", name=scratch_end_symbol, address=self.remote_scratch.pattern_address + 0x20, donotsave=True)
+        self._call("ce.query_memory", address=f"{self.primary_module_name}+0")
         self._call(
             "ce.query_memory_map",
             limit=8,
-            start_address=self.remote_scratch.base,
-            end_address=self.remote_scratch.base + self.remote_scratch.size,
+            start_address=scratch_symbol,
+            end_address=scratch_end_symbol,
             include_free=False,
         )
         self._call("ce.resolve_symbol", symbol=f"{self.primary_module_name}+0")
-        self._call("ce.resolve_symbol", address=self.primary_module_base)
+        self._call("ce.resolve_symbol", address=f"{self.primary_module_name}+0")
         self._call(
             "ce.aob_scan",
             pattern=self.remote_scratch.pattern_hex,
-            start_address=self.remote_scratch.base,
-            end_address=self.remote_scratch.base + self.remote_scratch.size,
+            start_address=scratch_symbol,
+            end_address=scratch_end_symbol,
             max_results=4,
         )
-        read_result = self._call("ce.read_memory", address=self.remote_scratch.pattern_address, size=8)
-        self._call("ce.write_memory", address=self.remote_scratch.pattern_address, bytes_hex=str(read_result["bytes_hex"]))
+        read_result = self._call("ce.read_memory", address=scratch_symbol, size=8)
+        self._call("ce.write_memory", address=scratch_symbol, bytes_hex=str(read_result["bytes_hex"]))
         self._call("ce.exported.list", available_only=False, limit=32)
         self._call("ce.exported.get", field_name="GetLuaState")
+        self._call("ce.unregister_symbol", name=scratch_end_symbol)
+        self._call("ce.unregister_symbol", name=scratch_symbol)
         self._call("ce.detach_process")
         self._call("ce.attach_process", process_name=self.primary_process_name)
 
@@ -684,6 +695,46 @@ return { base = base }
         self._call("ce.scan_destroy_all_sessions")
 
     def _run_table_and_record_tools(self) -> None:
+        batch_records = self._call(
+            "ce.record_create_many",
+            records=[
+                {
+                    "description": "ce_mcp_live_batch_health",
+                    "address": f"{self.primary_module_name}+0",
+                    "type": "4 Bytes",
+                    "value": 100,
+                },
+                {
+                    "description": "ce_mcp_live_batch_bytes",
+                    "address": f"{self.primary_module_name}+8",
+                    "type": "Byte Array",
+                    "value": "90 90",
+                },
+            ],
+        )
+        self.extra_record_ids.extend(int(entry["id"]) for entry in batch_records.get("records", []))
+        group_records = self._call(
+            "ce.record_create_group",
+            description="ce_mcp_live_group",
+            records=[
+                {
+                    "description": "group_child_health",
+                    "address": f"{self.primary_module_name}+0",
+                    "type": "4 Bytes",
+                    "value": 111,
+                },
+                {
+                    "description": "group_child_pointer",
+                    "address": f"{self.primary_module_name}+0",
+                    "type": "pointer",
+                },
+            ],
+            options={"active": False},
+        )
+        if "group" in group_records and isinstance(group_records["group"], dict):
+            self.extra_record_ids.append(int(group_records["group"]["id"]))
+        self.extra_record_ids.extend(int(entry["id"]) for entry in group_records.get("records", []))
+
         record = self._call(
             "ce.record_create",
             options={
@@ -714,6 +765,7 @@ return { base = base }
         self._call("ce.record_find_all_by_description", description="ce_mcp_live_record")
         self._call("ce.record_set_description", record_id=self.general_record_id, description="ce_mcp_live_record_renamed")
         self._call("ce.record_set_address", record_id=self.general_record_id, address=f"{self.primary_module_name}+10")
+        self._call("ce.record_set_type", record_id=self.general_record_id, value_type="4 Bytes")
         self._call("ce.record_set_type", record_id=self.general_record_id, value_type="pointer")
         self._call("ce.record_set_value", record_id=self.general_record_id, value=321)
         self._call("ce.record_set_active", record_id=self.general_record_id, active=False)

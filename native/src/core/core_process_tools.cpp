@@ -268,7 +268,7 @@ std::string CoreRuntime::Impl::make_resolve_symbol_response(std::string_view req
         }
         else if (address_text)
         {
-            const auto address = parse_unsigned_integer(*address_text);
+            const auto address = parse_or_resolve_address(*address_text);
             if (!address)
             {
                 return make_error_response(request_id, "invalid_address");
@@ -407,6 +407,34 @@ std::optional<std::pair<std::string, std::uint64_t>> CoreRuntime::Impl::parse_mo
     }
 
     return std::make_pair(std::string(trim_ascii(std::string(symbol.substr(0, plus)))), *offset);
+}
+
+std::optional<std::uint64_t> CoreRuntime::Impl::parse_or_resolve_address(std::string_view text) const
+{
+    const std::string trimmed = trim_ascii(std::string(text));
+    if (trimmed.empty())
+    {
+        return std::nullopt;
+    }
+
+    if (const auto parsed = parse_unsigned_integer(trimmed))
+    {
+        return parsed;
+    }
+
+    try
+    {
+        SymbolResolutionResult result;
+        if (resolve_symbol_to_address(trimmed, result))
+        {
+            return result.address;
+        }
+    }
+    catch (...)
+    {
+    }
+
+    return std::nullopt;
 }
 
 std::optional<DWORD> CoreRuntime::Impl::attach_process(DWORD process_id) const
