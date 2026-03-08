@@ -95,6 +95,7 @@ struct MemoryMapQuery
     std::uint64_t end_address = 0;
     std::size_t limit = kDefaultMemoryMapLimit;
     bool include_free = false;
+    std::uint64_t timeout_ms = 0;
 };
 
 struct MemoryMapResult
@@ -103,6 +104,7 @@ struct MemoryMapResult
     std::vector<MemoryRegionInfo> regions;
     std::size_t total_count = 0;
     bool truncated = false;
+    bool timed_out = false;
 };
 
 struct SymbolResolutionResult
@@ -122,6 +124,7 @@ struct AobScanQuery
     std::uint8_t scan_alignment = 1;
     std::uint64_t scan_hints = 0;
     std::size_t max_results = kDefaultAobResultLimit;
+    std::uint64_t timeout_ms = 0;
 };
 
 struct AobScanResult
@@ -130,6 +133,7 @@ struct AobScanResult
     std::size_t scanned_region_count = 0;
     std::uint64_t scanned_byte_count = 0;
     bool truncated = false;
+    bool timed_out = false;
     std::vector<std::uint64_t> matches;
 };
 

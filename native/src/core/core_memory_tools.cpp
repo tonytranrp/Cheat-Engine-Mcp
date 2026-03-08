@@ -7,6 +7,7 @@
 #include <cstring>
 #include <limits>
 #include <sstream>
+#include <thread>
 
 namespace ce_mcp
 {
@@ -154,6 +155,44 @@ std::string format_aob_scan_hints(const std::uint64_t hints)
         result += "pair0";
     }
     return result;
+}
+
+std::uint64_t parse_request_timeout_ms(std::string_view line)
+{
+    const auto timeout_text = extract_simple_field(line, "__timeout_ms");
+    if (!timeout_text)
+    {
+        return 0;
+    }
+
+    const auto timeout_ms = parse_unsigned_integer(*timeout_text);
+    if (!timeout_ms)
+    {
+        return 0;
+    }
+
+    return *timeout_ms;
+}
+
+std::optional<std::chrono::steady_clock::time_point> make_deadline(const std::uint64_t timeout_ms)
+{
+    if (timeout_ms == 0)
+    {
+        return std::nullopt;
+    }
+
+    return std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+}
+
+bool deadline_reached(const std::optional<std::chrono::steady_clock::time_point>& deadline)
+{
+    return deadline.has_value() && std::chrono::steady_clock::now() >= *deadline;
+}
+
+void cooperative_yield()
+{
+    ::SwitchToThread();
+    std::this_thread::yield();
 }
 
 std::optional<std::pair<std::uint64_t, std::uint64_t>> resolve_remote_module_section(HANDLE process,
@@ -308,6 +347,7 @@ std::string CoreRuntime::Impl::make_query_memory_response(std::string_view reque
 std::string CoreRuntime::Impl::make_query_memory_map_response(std::string_view request_id, std::string_view line) const
 {
     MemoryMapQuery query;
+    query.timeout_ms = parse_request_timeout_ms(line);
 
     if (const auto limit_text = extract_simple_field(line, "limit"))
     {
@@ -390,6 +430,8 @@ std::string CoreRuntime::Impl::make_query_memory_map_response(std::string_view r
            << ",\"total_count\":" << result.total_count
            << ",\"returned_count\":" << result.regions.size()
            << ",\"truncated\":" << (result.truncated ? "true" : "false")
+           << ",\"timed_out\":" << (result.timed_out ? "true" : "false")
+           << ",\"count_complete\":" << ((result.truncated || result.timed_out) ? "false" : "true")
            << ",\"regions\":[";
 
     for (std::size_t index = 0; index < result.regions.size(); ++index)
@@ -431,6 +473,7 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
     }
 
     AobScanQuery query;
+    query.timeout_ms = parse_request_timeout_ms(line);
     const auto parsed_signature = hat::parse_signature(*pattern_text);
     if (!parsed_signature.has_value() || parsed_signature.value().empty())
     {
@@ -579,6 +622,7 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
            << ",\"scanned_byte_count\":" << result.scanned_byte_count
            << ",\"returned_count\":" << result.matches.size()
            << ",\"truncated\":" << (result.truncated ? "true" : "false")
+           << ",\"timed_out\":" << (result.timed_out ? "true" : "false")
            << ",\"matches\":[";
 
     for (std::size_t index = 0; index < result.matches.size(); ++index)
@@ -784,11 +828,19 @@ std::optional<DWORD> CoreRuntime::Impl::query_memory_map(const MemoryMapQuery& q
     std::uint64_t current_address = std::max(query.start_address, minimum_address);
     const std::uint64_t end_address =
         query.end_address == 0 ? maximum_address : std::min(query.end_address, maximum_address);
+    const auto deadline = make_deadline(query.timeout_ms);
 
     result.process_id = context.process_id;
 
     while (current_address < end_address)
     {
+        if (deadline_reached(deadline))
+        {
+            result.truncated = true;
+            result.timed_out = true;
+            break;
+        }
+
         MEMORY_BASIC_INFORMATION mbi {};
         const SIZE_T queried = ::VirtualQueryEx(
             process.get(),
@@ -831,6 +883,7 @@ std::optional<DWORD> CoreRuntime::Impl::query_memory_map(const MemoryMapQuery& q
             else
             {
                 result.truncated = true;
+                break;
             }
         }
 
@@ -842,6 +895,7 @@ std::optional<DWORD> CoreRuntime::Impl::query_memory_map(const MemoryMapQuery& q
         }
 
         current_address = next_address;
+        cooperative_yield();
     }
 
     return std::nullopt;
@@ -862,6 +916,7 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
 
     ScopedHandle process(context.handle);
     result.process_id = context.process_id;
+    const auto deadline = make_deadline(query.timeout_ms);
 
     const auto parsed_signature = hat::parse_signature(query.pattern_text);
     if (!parsed_signature.has_value() || parsed_signature.value().empty())
@@ -938,6 +993,13 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
 
     for (const auto& region : map_result.regions)
     {
+        if (deadline_reached(deadline))
+        {
+            result.truncated = true;
+            result.timed_out = true;
+            break;
+        }
+
         if (region.state != MEM_COMMIT || !region.readable || region.guarded || region.region_size < pattern_size)
         {
             continue;
@@ -960,6 +1022,13 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
 
         while (cursor < region_end)
         {
+            if (deadline_reached(deadline))
+            {
+                result.truncated = true;
+                result.timed_out = true;
+                return std::nullopt;
+            }
+
             const std::size_t chunk_size = static_cast<std::size_t>(
                 std::min<std::uint64_t>(kAobScanChunkSize, region_end - cursor));
             std::vector<unsigned char> chunk(chunk_size);
@@ -1049,6 +1118,7 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
             }
 
             cursor += static_cast<std::uint64_t>(bytes_read);
+            cooperative_yield();
         }
     }
 

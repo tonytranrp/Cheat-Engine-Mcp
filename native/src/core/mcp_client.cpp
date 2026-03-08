@@ -7,7 +7,9 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -257,6 +259,11 @@ struct Client::Impl
     int plugin_id = 0;
     std::jthread worker;
     std::mutex socket_mutex;
+    std::mutex send_mutex;
+    std::mutex request_queue_mutex;
+    std::condition_variable_any request_queue_cv;
+    std::deque<std::pair<std::string, SOCKET>> request_queue;
+    std::vector<std::jthread> request_workers;
     SOCKET active_socket = INVALID_SOCKET;
 
     void log(std::string_view message) const
@@ -271,6 +278,7 @@ struct Client::Impl
     {
         stop();
         plugin_id = id;
+        start_request_workers();
         worker = std::jthread(
             [this](std::stop_token stop_token)
             {
@@ -280,14 +288,13 @@ struct Client::Impl
 
     void stop() noexcept
     {
-        if (!worker.joinable())
+        if (worker.joinable())
         {
-            return;
+            worker.request_stop();
+            shutdown_active_socket();
+            worker.join();
         }
-
-        worker.request_stop();
-        shutdown_active_socket();
-        worker.join();
+        stop_request_workers();
     }
 
     void shutdown_active_socket() noexcept
@@ -309,6 +316,110 @@ struct Client::Impl
     {
         std::lock_guard<std::mutex> lock(socket_mutex);
         active_socket = INVALID_SOCKET;
+    }
+
+    [[nodiscard]] bool is_socket_active(SOCKET socket) noexcept
+    {
+        std::lock_guard<std::mutex> lock(socket_mutex);
+        return active_socket == socket;
+    }
+
+    void start_request_workers()
+    {
+        stop_request_workers();
+
+        const unsigned int hardware_threads = std::thread::hardware_concurrency();
+        const unsigned int worker_count = std::clamp(hardware_threads == 0 ? 4u : hardware_threads, 2u, 6u);
+        request_workers.reserve(worker_count);
+        for (unsigned int index = 0; index < worker_count; ++index)
+        {
+            request_workers.emplace_back(
+                [this](std::stop_token stop_token)
+                {
+                    request_worker_loop(stop_token);
+                });
+        }
+    }
+
+    void stop_request_workers() noexcept
+    {
+        if (request_workers.empty())
+        {
+            return;
+        }
+
+        for (auto& request_worker : request_workers)
+        {
+            request_worker.request_stop();
+        }
+        request_queue_cv.notify_all();
+        request_workers.clear();
+
+        std::lock_guard<std::mutex> lock(request_queue_mutex);
+        request_queue.clear();
+    }
+
+    void enqueue_request(std::string line, SOCKET socket)
+    {
+        {
+            std::lock_guard<std::mutex> lock(request_queue_mutex);
+            request_queue.emplace_back(std::move(line), socket);
+        }
+        request_queue_cv.notify_one();
+    }
+
+    void clear_request_queue() noexcept
+    {
+        std::lock_guard<std::mutex> lock(request_queue_mutex);
+        request_queue.clear();
+    }
+
+    void request_worker_loop(std::stop_token stop_token)
+    {
+        while (!stop_token.stop_requested())
+        {
+            std::pair<std::string, SOCKET> request;
+            {
+                std::unique_lock<std::mutex> lock(request_queue_mutex);
+                request_queue_cv.wait(lock, stop_token,
+                                      [this]()
+                                      {
+                                          return !request_queue.empty();
+                                      });
+                if (stop_token.stop_requested())
+                {
+                    return;
+                }
+                if (request_queue.empty())
+                {
+                    continue;
+                }
+
+                request = std::move(request_queue.front());
+                request_queue.pop_front();
+            }
+
+            process_call_request(request.first, request.second);
+        }
+    }
+
+    void process_call_request(std::string_view line, SOCKET socket)
+    {
+        const auto response = request_handler(line);
+        if (!response)
+        {
+            return;
+        }
+
+        if (!is_socket_active(socket))
+        {
+            return;
+        }
+
+        if (!send_line(socket, *response))
+        {
+            log("Failed to send tool call response.");
+        }
     }
 
     void run_loop(std::stop_token stop_token)
@@ -333,6 +444,7 @@ struct Client::Impl
 
                     process_session(socket.get(), stop_token);
                     clear_active_socket();
+                    clear_request_queue();
                     log("Disconnected from MCP server.");
                 }
 
@@ -399,6 +511,7 @@ struct Client::Impl
         std::string payload(line);
         payload.push_back('\n');
 
+        std::lock_guard<std::mutex> send_lock(send_mutex);
         std::size_t offset = 0;
         while (offset < payload.size())
         {
@@ -515,16 +628,7 @@ struct Client::Impl
                 return;
             }
 
-            const auto response = request_handler(line);
-            if (!response)
-            {
-                return;
-            }
-
-            if (!send_line(socket, *response))
-            {
-                log("Failed to send tool call response.");
-            }
+            enqueue_request(std::string(line), socket);
             return;
         }
 

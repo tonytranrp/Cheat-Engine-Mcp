@@ -14,6 +14,7 @@ from ..runtime.process_runtime import PROCESS_RUNTIME
 from .common import native_tool
 
 AOB_SCAN_TIMEOUT_PARAMETER = ParameterSpec("timeout_seconds", float, 300.0)
+NATIVE_TIMEOUT_PARAMETER = ParameterSpec("timeout_seconds", float, 30.0)
 
 
 def _parse_integer(value: Any) -> int | None:
@@ -391,6 +392,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 ParameterSpec("start_address", int | str | None, None),
                 ParameterSpec("end_address", int | str | None, None),
                 ParameterSpec("include_free", bool, False),
+                NATIVE_TIMEOUT_PARAMETER,
             ),
             timeout_seconds=30.0,
         ),

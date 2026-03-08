@@ -10,6 +10,35 @@ from pathlib import Path
 from typing import Iterator
 
 
+def get_process_command_line(pid: int) -> str | None:
+    command = (
+        "Get-CimInstance Win32_Process "
+        f"-Filter \"ProcessId = {pid}\" | "
+        "Select-Object -ExpandProperty CommandLine"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    text = result.stdout.strip()
+    return text or None
+
+
+def looks_like_stdio_backend(command_line: str | None) -> bool:
+    if not command_line:
+        return False
+    normalized = command_line.casefold()
+    if "ce_mcp_server" not in normalized:
+        return False
+    if "--transport" not in normalized:
+        return True
+    return "--transport stdio" in normalized
+
+
 def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.5)
@@ -58,7 +87,7 @@ def start_backend(repo_root: Path) -> subprocess.Popen[str]:
     env["PYTHONPATH"] = python_src if not existing_pythonpath else python_src + os.pathsep + existing_pythonpath
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return subprocess.Popen(
-        [sys.executable, "-m", "ce_mcp_server"],
+        [sys.executable, "-m", "ce_mcp_server", "--transport", "bridge-only"],
         cwd=repo_root,
         env=env,
         creationflags=creationflags,
@@ -108,6 +137,13 @@ def managed_bridge_backend(repo_root: Path,
             raise RuntimeError(
                 f"port {port} is already in use by PID {existing_pid}. "
                 "Stop the existing ce_mcp_server instance first or rerun with --manage-existing-backend."
+            )
+        existing_command_line = get_process_command_line(existing_pid)
+        if looks_like_stdio_backend(existing_command_line):
+            raise RuntimeError(
+                f"refusing to stop PID {existing_pid} on port {port} because it appears to be a stdio-backed "
+                "ce_mcp_server process. Stopping it would sever the active MCP client transport. "
+                "Use a dedicated bridge port and restart Cheat Engine into that port for isolated live validation."
             )
         stop_process(existing_pid)
         wait_for_port_state(port, should_listen=False, timeout_seconds=10.0)

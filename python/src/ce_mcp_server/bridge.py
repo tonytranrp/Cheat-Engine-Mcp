@@ -160,9 +160,17 @@ class CheatEngineSession:
             message = {"type": "call", "id": request_id, "tool": tool_name}
             if payload:
                 message.update(payload)
+            message.setdefault("__timeout_ms", max(1, int(timeout_seconds * 1000.0)))
             self._send_message(message)
 
             if not pending.event.wait(timeout_seconds):
+                self._logger.warning(
+                    "Tool %s timed out after %.1fs on session %s; closing the live session.",
+                    tool_name,
+                    timeout_seconds,
+                    self._info.session_id,
+                )
+                self.close()
                 raise ToolTimeoutError(f"tool '{tool_name}' timed out after {timeout_seconds:.1f}s")
 
             if pending.response is None:

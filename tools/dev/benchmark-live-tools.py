@@ -83,7 +83,7 @@ def main() -> int:
     parser.add_argument(
         "--manage-existing-backend",
         action="store_true",
-        help="Temporarily stop an existing ce_mcp_server listener on this port, run the benchmark, then restart it.",
+        help="Temporarily stop and restore an existing detached bridge listener on this port. Refuses stdio-backed ce_mcp_server instances.",
     )
     args = parser.parse_args()
 

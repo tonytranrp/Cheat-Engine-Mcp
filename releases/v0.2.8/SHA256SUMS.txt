@@ -1,0 +1,3 @@
+ec7b6c2f2ac38a1fce6bcb139a1de3d953fedc1b035b72dab11ff6357c935d17 *ce_mcp_plugin.dll
+7b3e03452400bcdd149f0731df4ba36911ec626ca50249414c56f4515c9c9bb6 *ce_mcp_plugin_core.dll
+079e58258cb720069fb76937aa7e49478de12871f09affd2924cb61c58c8ea75 *cheat-engine-mcp-0.2.8-windows-x64.zip

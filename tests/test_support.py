@@ -106,6 +106,69 @@ class FakeToolContext:
             return {"ok": True, "address": 0x140000000, "bytes_read": 16, "bytes_hex": "4D5A9000"}
         if tool_name == "ce.write_memory":
             return {"ok": True, "address": 0x140000000, "bytes_written": 1, "bytes_hex": "90"}
+        if tool_name == "ce.query_memory_map":
+            raw_start_address = (payload or {}).get("start_address", 0x140000000) or 0x140000000
+            raw_end_address = (payload or {}).get("end_address", 0x140010000) or 0x140010000
+            if isinstance(raw_start_address, str):
+                start_address = 0x140000000 if raw_start_address == "game.exe+0" else 0x140000100
+            else:
+                start_address = int(raw_start_address)
+            if isinstance(raw_end_address, str):
+                end_address = 0x140001000 if raw_end_address == "game.exe+0x1000" else 0x140010000
+            else:
+                end_address = int(raw_end_address)
+            return {
+                "ok": True,
+                "process_id": 4321,
+                "start_address": start_address,
+                "end_address": end_address,
+                "include_free": bool((payload or {}).get("include_free", False)),
+                "total_count": 3,
+                "returned_count": 3,
+                "truncated": False,
+                "timed_out": False,
+                "regions": [
+                    {
+                        "base_address": 0x140000000,
+                        "allocation_base": 0x140000000,
+                        "region_size": 0x1000,
+                        "state": 0x1000,
+                        "protect": 0x02,
+                        "allocation_protect": 0x02,
+                        "type": 0x20000,
+                        "readable": True,
+                        "writable": False,
+                        "executable": False,
+                        "guarded": False,
+                    },
+                    {
+                        "base_address": 0x140001000,
+                        "allocation_base": 0x140000000,
+                        "region_size": 0x3000,
+                        "state": 0x1000,
+                        "protect": 0x20,
+                        "allocation_protect": 0x20,
+                        "type": 0x1000000,
+                        "readable": True,
+                        "writable": False,
+                        "executable": True,
+                        "guarded": False,
+                    },
+                    {
+                        "base_address": 0x140004000,
+                        "allocation_base": 0x140000000,
+                        "region_size": 0x2000,
+                        "state": 0x1000,
+                        "protect": 0x04,
+                        "allocation_protect": 0x04,
+                        "type": 0x20000,
+                        "readable": True,
+                        "writable": True,
+                        "executable": False,
+                        "guarded": False,
+                    },
+                ],
+            }
         if tool_name == "ce.aob_scan":
             pattern = str((payload or {}).get("pattern", ""))
             matches = [0x140000200] if pattern else []

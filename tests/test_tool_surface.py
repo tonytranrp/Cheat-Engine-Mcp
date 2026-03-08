@@ -14,7 +14,7 @@ if str(PYTHON_SRC) not in sys.path:
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from ce_mcp_server.tools import register_all, scan_helper_tools, script_tools
+from ce_mcp_server.tools import native_tools, register_all, scan_helper_tools, script_tools, structure_tools
 from test_support import FakeServer, FakeToolContext, build_sample_args
 
 
@@ -172,6 +172,50 @@ class ToolSurfaceTests(unittest.TestCase):
         self.assertEqual(payload["scan_hint"], "pair0")
         self.assertEqual(payload["max_results"], 2)
         self.assertEqual(timeout_seconds, 75.0)
+
+    def test_query_memory_map_accepts_timeout_override(self) -> None:
+        server = FakeServer()
+        context = FakeToolContext()
+        native_tools.register(server, context)
+
+        result = server.tools["ce.query_memory_map"](
+            limit=8,
+            start_address="game.exe+0",
+            end_address="game.exe+0x1000",
+            include_free=False,
+            timeout_seconds=45.0,
+            session_id="ce-test",
+        )
+
+        self.assertTrue(result["ok"])
+        tool_name, payload, _, timeout_seconds = context.native_calls[-1]
+        self.assertEqual(tool_name, "ce.query_memory_map")
+        self.assertEqual(payload["limit"], 8)
+        self.assertEqual(timeout_seconds, 45.0)
+
+    def test_dissect_module_uses_chunked_region_strategy(self) -> None:
+        server = FakeServer()
+        context = FakeToolContext()
+        structure_tools.register(server, context)
+
+        result = server.tools["ce.dissect_module"](
+            module_name="game.exe",
+            clear_first=True,
+            executable_only=True,
+            chunk_size=0x2000,
+            timeout_seconds=90.0,
+            session_id="ce-test",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["strategy"], "chunked_regions")
+        self.assertEqual(result["region_count"], 1)
+        self.assertEqual(result["chunk_count"], 2)
+        self.assertEqual(context.native_calls[1][0], "ce.query_memory_map")
+        dissect_runtime_calls = [call for call in context.runtime_calls if call[0] == "dissect"]
+        self.assertEqual(dissect_runtime_calls[0][1], "clear")
+        self.assertEqual(dissect_runtime_calls[1][1], "dissect_region")
+        self.assertEqual(dissect_runtime_calls[2][1], "dissect_region")
 
 
 if __name__ == "__main__":

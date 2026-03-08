@@ -37,11 +37,27 @@ For development validation, the live suite can target a custom process instead o
 py -3 .\tools\dev\run-live-tool-suite.py --process-name "Tic-tak-toe.exe"
 ```
 
-If the normal backend is already listening on `5556`, let the script stop and restart it for the run:
+If a detached non-stdio backend is already listening on `5556`, let the script stop and restart it for the run:
 
 ```powershell
 py -3 .\tools\dev\run-live-tool-suite.py --process-name "Minecraft.Windows.exe" --manage-existing-backend
 ```
+
+Do not use `--manage-existing-backend` against an active stdio-backed `ce_mcp_server` process. The harness now refuses that path because stopping the server would sever the live MCP client transport.
+
+If you need isolated live validation while an interactive backend is already active:
+
+1. Edit `build/loader/runtime/mcp_config.txt` and set a temporary bridge port such as `5566`.
+2. Restart Cheat Engine so the loader reconnects to the new port.
+3. Run the suite or benchmark against the same port:
+
+```powershell
+py -3 .\tools\dev\run-live-tool-suite.py --process-name "Minecraft.Windows.exe" --port 5566
+py -3 .\tools\dev\benchmark-live-tools.py --process-name "Minecraft.Windows.exe" --port 5566
+```
+
+4. Restore `build/loader/runtime/mcp_config.txt` to `5556`.
+5. Restart Cheat Engine again.
 
 You can also set:
 
@@ -129,6 +145,26 @@ Example:
 [mcp_servers.cheat-engine]
 startup_timeout_sec = 120
 ```
+
+### `tool '<name>' timed out after <n>s`
+
+Meaning:
+
+- the backend sent the tool call to Cheat Engine
+- the CE side did not answer inside the timeout budget
+- the backend closed that CE bridge session on purpose so later calls do not pile up behind a poisoned request
+
+Fix:
+
+1. Check whether the request scope was too broad.
+2. Add `module_name`, `section_name`, or explicit `start_address` / `end_address` when possible.
+3. Increase `timeout_seconds` only when the operation is legitimately large.
+4. If Cheat Engine itself is wedged, restart it with `.\tools\dev\restart-cheat-engine.ps1`.
+
+Notes:
+
+- native `ce.query_memory_map` and native AOB scans now return `timed_out` and `truncated` when they hit the internal budget instead of running forever
+- `ce.dissect_module` is now chunked, but a large target can still take time if you choose a very broad scope
 
 ### `MCP startup incomplete (failed: ida-local, cheat-engine)`
 

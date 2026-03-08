@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import socket
 import sys
 import unittest
 from pathlib import Path
@@ -11,7 +13,7 @@ if str(PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(PYTHON_SRC))
 
 from ce_mcp_server.bridge import CheatEngineBridge
-from ce_mcp_server.bridge import NoSessionError, SessionInfo
+from ce_mcp_server.bridge import CheatEngineSession, NoSessionError, SessionInfo, ToolTimeoutError
 
 
 class DummySession:
@@ -64,6 +66,38 @@ class BridgeTests(unittest.TestCase):
 
         with self.assertRaises(NoSessionError):
             bridge.call_tool("ce.read_memory", session_id="ce-stale")
+
+    def test_timed_out_session_closes_itself(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            closed_sessions: list[str] = []
+            reader = left.makefile("r", encoding="utf-8", newline="\n")
+            writer = left.makefile("w", encoding="utf-8", newline="\n")
+            session = CheatEngineSession(
+                sock=left,
+                reader=reader,
+                writer=writer,
+                info=SessionInfo(
+                    session_id="ce-timeout",
+                    peer="127.0.0.1:5556",
+                    connected_at=1.0,
+                    plugin="MCP Bridge Plugin",
+                    plugin_id=1,
+                    sdk_version=6,
+                    ce_process_id=1234,
+                    tools=[],
+                ),
+                on_close=closed_sessions.append,
+                logger=logging.getLogger("ce_mcp.tests.bridge"),
+            )
+
+            with self.assertRaises(ToolTimeoutError):
+                session.call_tool("ce.read_memory", timeout_seconds=0.01)
+
+            self.assertTrue(session.is_closed())
+            self.assertEqual(closed_sessions, ["ce-timeout"])
+        finally:
+            right.close()
 
 
 if __name__ == "__main__":

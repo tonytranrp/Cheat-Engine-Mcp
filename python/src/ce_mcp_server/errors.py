@@ -95,11 +95,12 @@ def error_payload(tool_name: str, exc: Exception) -> dict[str, Any]:
             ToolStateError(
                 str(exc),
                 code="tool_timeout",
-                hint="The target operation did not finish before the current tool timeout. Narrow the scope, use a bounded range, or raise timeout_seconds on heavy tools.",
+                hint="The target operation did not finish before the current tool timeout. The timed-out CE bridge session was closed so later calls do not pile up behind a stuck request.",
                 next_steps=[
                     "Reduce the scan/module/range size.",
                     "Prefer module_name or explicit address bounds over whole-process scans.",
                     "Retry with a larger timeout_seconds value on the specific tool when available.",
+                    "Wait for the CE loader to reconnect, or restart Cheat Engine if the session does not return.",
                 ],
             ),
         )
@@ -359,6 +360,18 @@ def _annotate_message(tool_name: str, message: str) -> McpToolError:
             ],
             required_order=["ce.attach_process", "ce.debug_start", "ce.debug_status"],
             example='ce.debug_start(debugger_interface=2)',
+        )
+
+    if message == "operation_timed_out":
+        return ToolStateError(
+            "The target operation hit its internal deadline and returned before wedging the session indefinitely.",
+            code="operation_timed_out",
+            hint="Narrow the range, lower the scope, or increase timeout_seconds on tools that expose it.",
+            next_steps=[
+                "Reduce the module or address range.",
+                "Retry with a higher timeout_seconds value where the tool supports it.",
+                "If the session does not reconnect after repeated timeouts, restart Cheat Engine.",
+            ],
         )
 
     if message.startswith("debug_watch_not_found:"):
