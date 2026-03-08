@@ -992,20 +992,67 @@ return { base = base }
         self._call("ce.debug_start", debugger_interface=2)
         self._call("ce.debug_continue", continue_option="run")
         self._call("ce.debug_list_breakpoints")
-        self._safe_call("ce.debug_watch_accesses_start", address=self.dotnet_target.health_address, size=4, method="debug_register", max_hits=4, auto_continue=True, debugger_interface=2)
-        self._safe_call("ce.debug_watch_writes_start", address=self.dotnet_target.health_address, size=4, method="debug_register", max_hits=4, auto_continue=True, debugger_interface=2)
-        execute_watch = self._safe_call("ce.debug_watch_execute_start", address=self.primary_module_base, size=1, method="int3", max_hits=1, auto_continue=True, debugger_interface=2)
-        watch_id = None
-        if execute_watch is not None and execute_watch.get("ok") is not False:
-            watch_id = str(execute_watch["watch"]["watch_id"])
+
+        access_watch = self._call(
+            "ce.debug_watch_accesses_start",
+            address=self.dotnet_target.health_address,
+            size=4,
+            method="debug_register",
+            max_hits=16,
+            auto_continue=True,
+            debugger_interface=2,
+        )
+        write_watch = self._call(
+            "ce.debug_watch_writes_start",
+            address=self.dotnet_target.coins_address,
+            size=8,
+            method="debug_register",
+            max_hits=16,
+            auto_continue=True,
+            debugger_interface=2,
+        )
+        sleep_ex = self._call("ce.get_address_safe", expression="kernel32.SleepEx")
+        execute_watch = self._call(
+            "ce.debug_watch_execute_start",
+            address=int(sleep_ex["address"]),
+            size=1,
+            method="int3",
+            max_hits=16,
+            auto_continue=True,
+            debugger_interface=2,
+        )
+        access_watch_id = str(access_watch["watch"]["watch_id"])
+        write_watch_id = str(write_watch["watch"]["watch_id"])
+        execute_watch_id = str(execute_watch["watch"]["watch_id"])
+
         time.sleep(1.0)
-        if watch_id is not None:
-            self._safe_call("ce.debug_watch_get_hits", watch_id=watch_id, limit=8)
-            self._safe_call("ce.debug_watch_stop", watch_id=watch_id)
-        else:
-            self._safe_call("ce.debug_watch_get_hits", watch_id="ce-missing-watch", limit=8)
-            self._safe_call("ce.debug_watch_stop", watch_id="ce-missing-watch")
+
+        access_hits = self._call("ce.debug_watch_get_hits", watch_id=access_watch_id, limit=8)
+        write_hits = self._call("ce.debug_watch_get_hits", watch_id=write_watch_id, limit=8)
+        execute_hits = self._call("ce.debug_watch_get_hits", watch_id=execute_watch_id, limit=8)
+        if int(access_hits["hit_count"]) < 1:
+            raise AssertionError("ce.debug_watch_accesses_start did not capture any hits")
+        if int(write_hits["hit_count"]) < 1:
+            raise AssertionError("ce.debug_watch_writes_start did not capture any hits")
+        if int(execute_hits["hit_count"]) < 1:
+            raise AssertionError("ce.debug_watch_execute_start did not capture any hits")
+
+        breakpoints_before_stop = self._call("ce.debug_list_breakpoints")
+        self._call("ce.debug_watch_stop", watch_id=execute_watch_id)
+        breakpoints_after_stop = self._call("ce.debug_list_breakpoints")
+        if int(breakpoints_after_stop["count"]) >= int(breakpoints_before_stop["count"]):
+            raise AssertionError(
+                "ce.debug_watch_stop did not reduce the live breakpoint count"
+            )
+
+        self._safe_call("ce.debug_watch_get_hits", watch_id="ce-missing-watch", limit=8)
+        self._safe_call("ce.debug_watch_stop", watch_id="ce-missing-watch")
         self._call("ce.debug_watch_stop_all")
+        breakpoints_after_stop_all = self._call("ce.debug_list_breakpoints")
+        if int(breakpoints_after_stop_all["count"]) != 0:
+            raise AssertionError(
+                f"ce.debug_watch_stop_all left live breakpoints behind: {breakpoints_after_stop_all['breakpoints']}"
+            )
         self._call("ce.attach_process", process_name=self.primary_process_name)
 
     def _assert_all_tools_invoked(self) -> None:

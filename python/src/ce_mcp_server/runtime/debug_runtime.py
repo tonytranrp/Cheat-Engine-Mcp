@@ -4,13 +4,14 @@ from ..context import RuntimeModule
 
 DEBUG_RUNTIME = RuntimeModule(
     name="debug",
-    version="2026.03.08.2",
+    version="2026.03.08.3",
     script=r'''
 _G.__ce_mcp = _G.__ce_mcp or {}
 _G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
 local root = _G.__ce_mcp
 root.debug = root.debug or { watches = {}, next_id = 1 }
 local M = root.debug
+M.needs_rebuild = M.needs_rebuild or false
 
 local TRIGGERS = {
   execute = bptExecute,
@@ -130,6 +131,89 @@ local function breakpoint_registered(address)
   return false
 end
 
+local function ensure_debugger_started(interface)
+  local requested_interface = tonumber(interface)
+  if requested_interface == nil or requested_interface == 0 then
+    requested_interface = 2
+  end
+  if not debug_isDebugging() then
+    debugProcess(requested_interface)
+  end
+  if not debug_isDebugging() then
+    error('debugger_start_failed:' .. tostring(requested_interface))
+  end
+  return requested_interface
+end
+
+local function install_watch_breakpoint(watch)
+  local call_ok, result
+  if watch.method == nil then
+    call_ok, result = pcall(debug_setBreakpoint, watch.address, watch.size, watch.trigger, watch.callback)
+  else
+    call_ok, result = pcall(debug_setBreakpoint, watch.address, watch.size, watch.trigger, watch.method, watch.callback)
+  end
+  if not call_ok then
+    error('debug_setBreakpoint_failed')
+  end
+  if result == false and not breakpoint_registered(watch.address) then
+    error('debug_setBreakpoint_failed')
+  end
+end
+
+local function collect_active_watches()
+  local active_watches = {}
+  for _, watch in pairs(M.watches) do
+    if watch.active then
+      active_watches[#active_watches + 1] = watch
+    end
+  end
+  table.sort(active_watches, function(left, right) return left.id < right.id end)
+  return active_watches
+end
+
+local function rebuild_active_breakpoints(interface_hint)
+  if type(detachIfPossible) == 'function' then
+    pcall(detachIfPossible)
+  end
+
+  local active_watches = collect_active_watches()
+  if #active_watches == 0 then
+    M.needs_rebuild = false
+    return {remaining = 0, debugger_interface = tonumber(interface_hint) or 2}
+  end
+
+  local requested_interface = tonumber(interface_hint)
+  if requested_interface == nil or requested_interface == 0 then
+    for _, watch in ipairs(active_watches) do
+      if tonumber(watch.debugger_interface) ~= nil and tonumber(watch.debugger_interface) ~= 0 then
+        requested_interface = tonumber(watch.debugger_interface)
+        break
+      end
+    end
+  end
+  requested_interface = ensure_debugger_started(requested_interface)
+
+  if debug_isBroken() then
+    pcall(function() debug_continueFromBreakpoint(co_run) end)
+  end
+
+  for _, watch in ipairs(active_watches) do
+    install_watch_breakpoint(watch)
+  end
+
+  M.needs_rebuild = false
+  return {
+    remaining = #active_watches,
+    debugger_interface = requested_interface,
+  }
+end
+
+local function sync_breakpoints_if_needed(interface_hint)
+  if M.needs_rebuild then
+    rebuild_active_breakpoints(interface_hint)
+  end
+end
+
 local function serialize_watch(watch, include_hits, limit)
   if watch == nil then
     return nil
@@ -161,6 +245,7 @@ local function serialize_watch(watch, include_hits, limit)
 end
 
 function M.status()
+  sync_breakpoints_if_needed()
   local watches = {}
   for _, watch in pairs(M.watches) do
     watches[#watches + 1] = serialize_watch(watch, false)
@@ -179,16 +264,8 @@ function M.status()
 end
 
 function M.start(interface)
-  local requested_interface = tonumber(interface)
-  if requested_interface == nil then
-    requested_interface = 2
-  end
-  if not debug_isDebugging() then
-    debugProcess(requested_interface)
-  end
-  if not debug_isDebugging() then
-    error('debugger_start_failed:' .. tostring(requested_interface))
-  end
+  local requested_interface = ensure_debugger_started(interface)
+  sync_breakpoints_if_needed(requested_interface)
   local status = M.status()
   status.requested_interface = requested_interface
   return status
@@ -206,6 +283,7 @@ function M.continue_execution(continue_option)
 end
 
 function M.list_breakpoints()
+  sync_breakpoints_if_needed()
   local breakpoints = serialize_breakpoint_list()
   return {
     count = #breakpoints,
@@ -214,16 +292,8 @@ function M.list_breakpoints()
 end
 
 function M.watch_start(address, size, trigger, method, max_hits, auto_continue, debugger_interface)
-  local requested_interface = tonumber(debugger_interface)
-  if requested_interface == nil then
-    requested_interface = 2
-  end
-  if not debug_isDebugging() then
-    debugProcess(requested_interface)
-  end
-  if not debug_isDebugging() then
-    error('debugger_start_failed:' .. tostring(requested_interface))
-  end
+  local requested_interface = ensure_debugger_started(debugger_interface)
+  sync_breakpoints_if_needed(requested_interface)
 
   local resolved_address = resolve_address(address)
   local normalized_trigger = normalize_trigger(trigger)
@@ -241,10 +311,19 @@ function M.watch_start(address, size, trigger, method, max_hits, auto_continue, 
     hits = {},
     auto_continue = auto_continue ~= false,
     callback = nil,
+    debugger_interface = requested_interface,
   }
   M.next_id = M.next_id + 1
 
   local function on_breakpoint()
+    if not watch.active then
+      if watch.auto_continue and debug_isBroken() then
+        debug_continueFromBreakpoint(co_run)
+        return 1
+      end
+      return 0
+    end
+
     local registers = snapshot_registers()
     local instruction_pointer = current_instruction_pointer(registers)
     local instruction = nil
@@ -262,7 +341,7 @@ function M.watch_start(address, size, trigger, method, max_hits, auto_continue, 
 
     if #watch.hits >= watch.max_hits then
       watch.active = false
-      pcall(function() debug_removeBreakpoint(watch.address) end)
+      M.needs_rebuild = true
     end
 
     if watch.auto_continue and debug_isBroken() then
@@ -275,17 +354,8 @@ function M.watch_start(address, size, trigger, method, max_hits, auto_continue, 
   watch.callback = on_breakpoint
   M.watches[watch.id] = watch
 
-  local call_ok, result
-  if normalized_method == nil then
-    call_ok, result = pcall(debug_setBreakpoint, resolved_address, watch.size, normalized_trigger, on_breakpoint)
-  else
-    call_ok, result = pcall(debug_setBreakpoint, resolved_address, watch.size, normalized_trigger, normalized_method, on_breakpoint)
-  end
-  if not call_ok then
-    M.watches[watch.id] = nil
-    error('debug_setBreakpoint_failed')
-  end
-  if result == false and not breakpoint_registered(resolved_address) then
+  local install_ok = pcall(install_watch_breakpoint, watch)
+  if not install_ok then
     M.watches[watch.id] = nil
     error('debug_setBreakpoint_failed')
   end
@@ -301,6 +371,7 @@ function M.watch_get_hits(watch_id, limit)
   if watch == nil then
     error('debug_watch_not_found:' .. tostring(watch_id))
   end
+  sync_breakpoints_if_needed(watch.debugger_interface)
   return serialize_watch(watch, true, tonumber(limit) or #watch.hits)
 end
 
@@ -310,8 +381,9 @@ function M.watch_stop(watch_id)
     return {stopped = false, watch_id = tostring(watch_id)}
   end
   watch.active = false
-  pcall(function() debug_removeBreakpoint(watch.address) end)
   M.watches[tostring(watch_id)] = nil
+  M.needs_rebuild = true
+  rebuild_active_breakpoints(watch.debugger_interface)
   return {
     stopped = true,
     watch_id = tostring(watch_id),
@@ -323,7 +395,6 @@ function M.watch_stop_all()
   local stopped = {}
   for watch_id, watch in pairs(M.watches) do
     watch.active = false
-    pcall(function() debug_removeBreakpoint(watch.address) end)
     stopped[#stopped + 1] = {
       watch_id = watch_id,
       address = watch.address,
@@ -331,11 +402,13 @@ function M.watch_stop_all()
     }
     M.watches[watch_id] = nil
   end
+  M.needs_rebuild = true
+  rebuild_active_breakpoints()
   table.sort(stopped, function(left, right) return left.watch_id < right.watch_id end)
   return {stopped = stopped, count = #stopped}
 end
 
-_G.__ce_mcp_modules["debug"] = "2026.03.08.2"
-return {ok = true, module = "debug", version = "2026.03.08.2"}
+_G.__ce_mcp_modules["debug"] = "2026.03.08.3"
+return {ok = true, module = "debug", version = "2026.03.08.3"}
 ''',
 )
