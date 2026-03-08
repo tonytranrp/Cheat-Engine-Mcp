@@ -160,7 +160,29 @@ class FakeToolContext:
             if function_name == "create_session":
                 return {"ok": True, "session_id": "scan-1"}
             if function_name == "list_sessions":
-                return {"ok": True, "sessions": [{"session_id": "scan-1", "has_foundlist": False, "only_one_result": False}]}
+                return {
+                    "ok": True,
+                    "sessions": [{
+                        "session_id": "scan-1",
+                        "has_foundlist": False,
+                        "only_one_result": False,
+                        "state": "completed",
+                        "scan_in_progress": False,
+                        "has_completed_scan": True,
+                        "last_scan_kind": "first",
+                        "last_result_count": 2,
+                    }],
+                }
+            if function_name == "get_session_state":
+                return {
+                    "ok": True,
+                    "session_id": "scan-1",
+                    "state": "completed",
+                    "scan_in_progress": False,
+                    "has_completed_scan": True,
+                    "last_scan_kind": "first",
+                    "last_result_count": 2,
+                }
             if function_name == "new_scan":
                 return {"ok": True, "session_id": "scan-1", "reset": True}
             if function_name in {"first_scan", "next_scan"}:
@@ -225,6 +247,20 @@ class FakeToolContext:
                 return {"ok": True, "process_id": 4321}
             if function_name == "get_cpu_count":
                 return {"ok": True, "count": 16}
+
+        if runtime_name == "lua":
+            if function_name == "get_package_paths":
+                return {"ok": True, "path": "./?.lua", "cpath": "./?.dll", "path_entries": ["./?.lua"], "cpath_entries": ["./?.dll"]}
+            if function_name in {"add_package_path", "add_package_cpath", "add_library_root"}:
+                return {"ok": True, "changed": True, "path": "./?.lua", "cpath": "./?.dll", "path_entries": ["./?.lua"], "cpath_entries": ["./?.dll"]}
+            if function_name == "require_module":
+                return {"ok": True, "module_name": "sample_module", "loaded": True, "value_type": "table", "value": {"answer": 42}}
+            if function_name == "unload_module":
+                return {"ok": True, "module_name": "sample_module", "loaded": False}
+            if function_name == "call_module_function":
+                return {"ok": True, "module_name": "sample_module", "function_name": "answer", "value": 42}
+            if function_name == "run_file":
+                return {"ok": True, "path": str((args or ["script.lua"])[0]), "result": {"value": 1}}
 
         if runtime_name == "structure":
             if function_name == "list_structures":
@@ -377,6 +413,15 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
 
     if tool_name == "ce.run_script_file":
         overrides["path"] = str(script_path)
+    if tool_name == "ce.lua_run_file":
+        overrides["path"] = str(script_path)
+    if tool_name == "ce.lua_add_library_root":
+        overrides["path"] = str(temp_dir)
+    if tool_name in {"ce.lua_require_module", "ce.lua_unload_module", "ce.lua_call_module_function"}:
+        overrides["module_name"] = "sample_module"
+    if tool_name == "ce.lua_call_module_function":
+        overrides["function_name"] = "answer"
+        overrides["args"] = []
     if tool_name == "ce.structure_add_element":
         overrides["options"] = {"offset": 0, "name": "health", "vartype": "dword", "bytesize": 4}
     if tool_name == "ce.structure_define":

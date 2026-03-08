@@ -7,6 +7,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..bridge import BridgeError
 from ..context import ToolContext
+from ..errors import ToolStateError, ToolUsageError
 from ..registration import ParameterSpec, ToolSpec, register_specs
 from ..runtime.scan_runtime import SCAN_RUNTIME
 
@@ -55,7 +56,12 @@ def _parse_integer(value: Any) -> int | None:
 
 def _normalize_limit(limit: int) -> int:
     if limit <= 0 or limit > MAX_RESULT_LIMIT:
-        raise ValueError(f"limit must be between 1 and {MAX_RESULT_LIMIT}")
+        raise ToolUsageError(
+            f"limit must be between 1 and {MAX_RESULT_LIMIT}",
+            code="invalid_limit",
+            hint="Use a positive result limit within the supported range.",
+            details={"minimum": 1, "maximum": MAX_RESULT_LIMIT, "received": limit},
+        )
     return int(limit)
 
 
@@ -112,9 +118,23 @@ def _resolve_module_bounds(ctx: ToolContext, ce_session_id: str, module_name: st
             base_address = _parse_integer(entry.get("base_address"))
             size = _parse_integer(entry.get("size"))
             if base_address is None or size is None or size <= 0:
-                raise ValueError(f"module '{module_name}' returned an invalid base/size")
+                raise ToolStateError(
+                    f"module '{module_name}' returned an invalid base/size",
+                    code="invalid_module_bounds",
+                    hint="The target module metadata is incomplete, so the scan range cannot be derived safely.",
+                    details={"module_name": module_name},
+                )
             return base_address, base_address + size, entry
-    raise ValueError(f"module '{module_name}' was not found in the attached process")
+    raise ToolUsageError(
+        f"module '{module_name}' was not found in the attached process",
+        code="module_not_found",
+        hint="Use ce.list_modules or ce.list_modules_full to inspect loaded module names first.",
+        details={"module_name": module_name},
+        next_steps=[
+            "Call ce.list_modules or ce.list_modules_full.",
+            "Retry the scan with the exact module_name returned by Cheat Engine.",
+        ],
+    )
 
 
 def _resolve_address_expression(ctx: ToolContext, ce_session_id: str, value: int | str | None, field_name: str) -> int | None:
@@ -126,7 +146,12 @@ def _resolve_address_expression(ctx: ToolContext, ce_session_id: str, value: int
         return parsed
 
     if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be an integer or CE address expression")
+        raise ToolUsageError(
+            f"{field_name} must be an integer or CE address expression",
+            code="invalid_address_expression",
+            hint="Pass an integer address or a Cheat Engine address expression such as module.exe+1234.",
+            details={"field_name": field_name, "received_type": type(value).__name__},
+        )
 
     resolved = ctx.call_lua_function(
         "getAddressSafe",
@@ -140,7 +165,12 @@ def _resolve_address_expression(ctx: ToolContext, ce_session_id: str, value: int
 
     parsed = _parse_integer(resolved.get("address"))
     if parsed is None:
-        raise ValueError(f"could not resolve {field_name}: {value}")
+        raise ToolUsageError(
+            f"could not resolve {field_name}: {value}",
+            code="address_resolution_failed",
+            hint="The expression did not resolve to a concrete address in the attached process.",
+            details={"field_name": field_name, "expression": value},
+        )
     return parsed
 
 
@@ -151,7 +181,15 @@ def _resolve_scope(ctx: ToolContext,
                    start_address: int | str | None,
                    end_address: int | str | None) -> tuple[int | None, int | None, dict[str, Any]]:
     if module_name and (start_address is not None or end_address is not None):
-        raise ValueError("use either module_name or explicit start/end addresses, not both")
+        raise ToolUsageError(
+            "use either module_name or explicit start/end addresses, not both",
+            code="conflicting_scan_scope",
+            hint="Choose one scan scope style: module_name or explicit start/end bounds.",
+            next_steps=[
+                "Use module_name when the target is expected inside one loaded module.",
+                "Use start_address/end_address when you need an explicit range.",
+            ],
+        )
 
     if module_name:
         start, end, entry = _resolve_module_bounds(ctx, ce_session_id, module_name)
@@ -281,6 +319,24 @@ def _collect_scan_results(ctx: ToolContext, ce_session_id: str, scan_session_id:
     return payload
 
 
+def _get_scan_session_state(ctx: ToolContext, ce_session_id: str, scan_session_id: str) -> dict[str, Any]:
+    result = _runtime_call_strict(
+        ctx,
+        "get_session_state",
+        args=[scan_session_id],
+        session_id=ce_session_id,
+        timeout_seconds=30.0,
+    )
+    return {
+        "session_id": str(result.get("session_id", scan_session_id)),
+        "state": str(result.get("state", "unknown")),
+        "scan_in_progress": bool(result.get("scan_in_progress", False)),
+        "has_completed_scan": bool(result.get("has_completed_scan", False)),
+        "last_scan_kind": result.get("last_scan_kind"),
+        "last_result_count": _parse_integer(result.get("last_result_count")) or 0,
+    }
+
+
 def _run_one_shot_scan(ctx: ToolContext,
                        *,
                        session_id: str | None,
@@ -395,6 +451,44 @@ def _next_scan_handler(ctx: ToolContext,
                        saved_result_name: str | None = None,
                        session_id: str | None = None) -> dict[str, Any]:
     ce_session_id = ctx.resolve_session_id(session_id)
+    state = _get_scan_session_state(ctx, ce_session_id, scan_session_id)
+    if state["scan_in_progress"]:
+        raise ToolStateError(
+            "This scan session already has an active scan in progress.",
+            code="scan_wait_required",
+            hint="Wait for the current scan to finish before starting a follow-up scan.",
+            details={"scan_session_id": scan_session_id, "state": state["state"]},
+            next_steps=[
+                "Call ce.scan_wait(scan_session_id=...).",
+                "Optionally inspect ce.scan_get_progress(scan_session_id=...).",
+                "Retry ce.scan_next_ex after the wait completes.",
+            ],
+            required_order=[
+                "ce.scan_create_session",
+                "ce.scan_first_ex",
+                "ce.scan_wait",
+                "ce.scan_next_ex",
+            ],
+        )
+    if not state["has_completed_scan"]:
+        raise ToolStateError(
+            "A completed first scan is required before this follow-up scan.",
+            code="scan_first_scan_required",
+            hint="ce.scan_next_ex refines an existing result set; it does not create the initial one.",
+            details={"scan_session_id": scan_session_id, "state": state["state"]},
+            next_steps=[
+                "Call ce.scan_first_ex or ce.scan_first on the same scan_session_id.",
+                "Call ce.scan_wait.",
+                "Then retry ce.scan_next_ex.",
+            ],
+            required_order=[
+                "ce.scan_create_session",
+                "ce.scan_first_ex",
+                "ce.scan_wait",
+                "ce.scan_next_ex",
+            ],
+            example='ce.scan_first_ex(scan_session_id="scan-1", scan_option="exact", value_type="dword", value=100)',
+        )
     options = _build_next_scan_options(
         scan_option=scan_option,
         value=value,
@@ -432,6 +526,24 @@ def _scan_collect_handler(ctx: ToolContext,
                           limit: int = DEFAULT_RESULT_LIMIT,
                           session_id: str | None = None) -> dict[str, Any]:
     ce_session_id = ctx.resolve_session_id(session_id)
+    state = _get_scan_session_state(ctx, ce_session_id, scan_session_id)
+    if state["scan_in_progress"]:
+        raise ToolStateError(
+            "Results are not ready while the scan is still running.",
+            code="scan_results_wait_required",
+            hint="Wait for the scan to finish before collecting FoundList results.",
+            details={"scan_session_id": scan_session_id, "state": state["state"]},
+            next_steps=[
+                "Call ce.scan_wait(scan_session_id=...).",
+                "Then call ce.scan_collect(scan_session_id=...).",
+            ],
+            required_order=[
+                "ce.scan_create_session",
+                "ce.scan_first_ex",
+                "ce.scan_wait",
+                "ce.scan_collect",
+            ],
+        )
     payload = _collect_scan_results(ctx, ce_session_id, scan_session_id, limit)
     payload["ok"] = True
     payload["ce_session_id"] = ce_session_id
@@ -619,7 +731,13 @@ def _scan_string_handler(ctx: ToolContext,
                          session_id: str | None = None) -> dict[str, Any]:
     normalized_encoding = encoding.strip().casefold()
     if normalized_encoding not in {"ascii", "ansi", "utf16", "utf-16", "wide", "unicode", "both"}:
-        raise ValueError("encoding must be one of: ascii, utf16, wide, unicode, both")
+        raise ToolUsageError(
+            "encoding must be one of: ascii, utf16, wide, unicode, both",
+            code="invalid_scan_encoding",
+            hint="Use ascii for single-byte strings, utf16 for wide strings, or both to search both encodings.",
+            details={"encoding": encoding},
+            example='ce.scan_string(text="inventory", encoding="both", module_name="Minecraft.Windows.exe")',
+        )
 
     limit = _normalize_limit(limit)
     encodings: list[str]

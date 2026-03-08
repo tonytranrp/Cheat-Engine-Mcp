@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
 
+from .errors import error_payload, normalize_tool_result
+
 
 @dataclass(frozen=True, slots=True)
 class ParameterSpec:
@@ -34,9 +36,9 @@ def register_tool(server: FastMCP, spec: ToolSpec) -> None:
 
     def impl(**kwargs):
         try:
-            return spec.handler(**kwargs)
+            return normalize_tool_result(spec.name, spec.handler(**kwargs))
         except Exception as exc:  # pragma: no cover - defensive boundary for MCP tools
-            return {"ok": False, "error": str(exc)}
+            return error_payload(spec.name, exc)
 
     impl.__name__ = spec.name.replace('.', '_').replace('-', '_')
     impl.__doc__ = spec.description

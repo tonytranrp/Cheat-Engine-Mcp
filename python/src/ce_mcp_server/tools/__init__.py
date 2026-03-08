@@ -7,6 +7,7 @@ from . import (
     address_tools,
     debug_tools,
     exported_tools,
+    lua_library_tools,
     memory_tools,
     native_tools,
     pointer_tools,
@@ -23,6 +24,7 @@ from . import (
 def register_all(server: FastMCP, ctx: ToolContext) -> None:
     native_tools.register(server, ctx)
     script_tools.register(server, ctx)
+    lua_library_tools.register(server, ctx)
     exported_tools.register(server, ctx)
     process_tools.register(server, ctx)
     debug_tools.register(server, ctx)

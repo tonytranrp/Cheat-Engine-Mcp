@@ -4,13 +4,24 @@ from ..context import RuntimeModule
 
 STRUCTURE_RUNTIME = RuntimeModule(
     name="structure",
-    version="2026.03.07.1",
+    version="2026.03.08.1",
     script=r'''
 _G.__ce_mcp = _G.__ce_mcp or {}
 _G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
 local root = _G.__ce_mcp
 root.structure = root.structure or {}
 local M = root.structure
+
+local function run_on_main_thread(fn)
+  local ok, result = false, nil
+  synchronize(function()
+    ok, result = pcall(fn)
+  end)
+  if not ok then
+    error(result)
+  end
+  return result
+end
 
 local VALUE_TYPES = {
   byte = vtByte,
@@ -146,88 +157,63 @@ local function resolve_child_structure(options)
 end
 
 function M.list_structures(include_elements)
-  local count = getStructureCount()
-  local structures = {}
-  for structure_index = 0, count - 1 do
-    structures[#structures + 1] = serialize_structure(getStructure(structure_index), include_elements and true or false)
-  end
-  return {count = count, structures = structures}
+  return run_on_main_thread(function()
+    local count = getStructureCount()
+    local structures = {}
+    for structure_index = 0, count - 1 do
+      structures[#structures + 1] = serialize_structure(getStructure(structure_index), include_elements and true or false)
+    end
+    return {count = count, structures = structures}
+  end)
 end
 
 function M.get_structure(name, index, include_elements)
-  local structure = resolve_structure(name, index)
-  return {structure = serialize_structure(structure, include_elements and true or false)}
+  return run_on_main_thread(function()
+    local structure = resolve_structure(name, index)
+    return {structure = serialize_structure(structure, include_elements and true or false)}
+  end)
 end
 
 function M.create_structure(name, add_global)
-  local structure = createStructure(tostring(name or ''))
-  if add_global ~= false then
-    structure.addToGlobalStructureList()
-  end
-  return {structure = serialize_structure(structure, true)}
+  return run_on_main_thread(function()
+    local structure = createStructure(tostring(name or ''))
+    if add_global ~= false then
+      structure.addToGlobalStructureList()
+    end
+    return {structure = serialize_structure(structure, true)}
+  end)
 end
 
 function M.delete_structure(name, index, destroy)
-  local structure = resolve_structure(name, index)
-  if structure == nil then
-    return {deleted = false}
-  end
+  return run_on_main_thread(function()
+    local structure = resolve_structure(name, index)
+    if structure == nil then
+      return {deleted = false}
+    end
 
-  pcall(function() structure.removeFromGlobalStructureList() end)
-  if destroy ~= false then
-    pcall(function() structure.destroy() end)
-  end
+    pcall(function() structure.removeFromGlobalStructureList() end)
+    if destroy ~= false then
+      pcall(function() structure.destroy() end)
+    end
 
-  return {
-    deleted = true,
-    name = tostring(structure.Name or ''),
-    index = find_structure_index(structure),
-  }
+    return {
+      deleted = true,
+      name = tostring(structure.Name or ''),
+      index = find_structure_index(structure),
+    }
+  end)
 end
 
 function M.add_element(name, index, options)
-  local structure = resolve_structure(name, index)
-  if structure == nil then
-    error('structure_not_found')
-  end
-
-  options = options or {}
-  structure.beginUpdate()
-  local ok, result = pcall(function()
-    local element = structure.addElement()
-    if options.offset ~= nil then element.Offset = tonumber(options.offset) or 0 end
-    if options.name ~= nil then element.Name = tostring(options.name) end
-    if options.vartype ~= nil then element.Vartype = normalize_vartype(options.vartype) end
-    if options.bytesize ~= nil then element.Bytesize = tonumber(options.bytesize) or 0 end
-
-    local child_structure = resolve_child_structure(options)
-    if child_structure ~= nil then
-      element.ChildStruct = child_structure
+  return run_on_main_thread(function()
+    local structure = resolve_structure(name, index)
+    if structure == nil then
+      error('structure_not_found')
     end
 
-    if options.child_struct_start ~= nil then
-      element.ChildStructStart = tonumber(options.child_struct_start) or 0
-    end
-
-    return element
-  end)
-  structure.endUpdate()
-
-  if not ok then
-    error(result)
-  end
-
-  return {
-    structure = serialize_structure(structure, true),
-    element = serialize_element(result),
-  }
-end
-
-function M.define_structure(name, elements, add_global)
-  local structure = createStructure(tostring(name or ''))
-  structure.beginUpdate()
-  local ok, err = pcall(function()
-    for _, options in ipairs(elements or {}) do
+    options = options or {}
+    structure.beginUpdate()
+    local ok, result = pcall(function()
       local element = structure.addElement()
       if options.offset ~= nil then element.Offset = tonumber(options.offset) or 0 end
       if options.name ~= nil then element.Name = tostring(options.name) end
@@ -242,52 +228,93 @@ function M.define_structure(name, elements, add_global)
       if options.child_struct_start ~= nil then
         element.ChildStructStart = tonumber(options.child_struct_start) or 0
       end
+
+      return element
+    end)
+    structure.endUpdate()
+
+    if not ok then
+      error(result)
     end
+
+    return {
+      structure = serialize_structure(structure, true),
+      element = serialize_element(result),
+    }
   end)
-  structure.endUpdate()
-  if not ok then
-    pcall(function() structure.destroy() end)
-    error(err)
-  end
+end
 
-  if add_global ~= false then
-    structure.addToGlobalStructureList()
-  end
+function M.define_structure(name, elements, add_global)
+  return run_on_main_thread(function()
+    local structure = createStructure(tostring(name or ''))
+    structure.beginUpdate()
+    local ok, err = pcall(function()
+      for _, options in ipairs(elements or {}) do
+        local element = structure.addElement()
+        if options.offset ~= nil then element.Offset = tonumber(options.offset) or 0 end
+        if options.name ~= nil then element.Name = tostring(options.name) end
+        if options.vartype ~= nil then element.Vartype = normalize_vartype(options.vartype) end
+        if options.bytesize ~= nil then element.Bytesize = tonumber(options.bytesize) or 0 end
 
-  return {structure = serialize_structure(structure, true)}
+        local child_structure = resolve_child_structure(options)
+        if child_structure ~= nil then
+          element.ChildStruct = child_structure
+        end
+
+        if options.child_struct_start ~= nil then
+          element.ChildStructStart = tonumber(options.child_struct_start) or 0
+        end
+      end
+    end)
+    structure.endUpdate()
+    if not ok then
+      pcall(function() structure.destroy() end)
+      error(err)
+    end
+
+    if add_global ~= false then
+      structure.addToGlobalStructureList()
+    end
+
+    return {structure = serialize_structure(structure, true)}
+  end)
 end
 
 function M.auto_guess(name, index, base_address, offset, size)
-  local structure = resolve_structure(name, index)
-  if structure == nil then
-    error('structure_not_found')
-  end
+  return run_on_main_thread(function()
+    local structure = resolve_structure(name, index)
+    if structure == nil then
+      error('structure_not_found')
+    end
 
-  local resolved_base = getAddressSafe(base_address)
-  if resolved_base == nil then
-    error('structure_base_not_found')
-  end
+    local resolved_base = getAddressSafe(base_address)
+    if resolved_base == nil then
+      error('structure_base_not_found')
+    end
 
-  structure.autoGuess(resolved_base, tonumber(offset) or 0, tonumber(size) or 4096)
-  return {structure = serialize_structure(structure, true), base_address = resolved_base}
+    structure.autoGuess(resolved_base, tonumber(offset) or 0, tonumber(size) or 4096)
+    return {structure = serialize_structure(structure, true), base_address = resolved_base}
+  end)
 end
 
 function M.fill_from_dotnet(name, index, address, change_name)
-  local structure = resolve_structure(name, index)
-  if structure == nil then
-    error('structure_not_found')
-  end
+  return run_on_main_thread(function()
+    local structure = resolve_structure(name, index)
+    if structure == nil then
+      error('structure_not_found')
+    end
 
-  local resolved_address = getAddressSafe(address)
-  if resolved_address == nil then
-    error('structure_dotnet_address_not_found')
-  end
+    local resolved_address = getAddressSafe(address)
+    if resolved_address == nil then
+      error('structure_dotnet_address_not_found')
+    end
 
-  structure.fillFromDotNetAddress(resolved_address, change_name ~= false)
-  return {structure = serialize_structure(structure, true), address = resolved_address}
+    structure.fillFromDotNetAddress(resolved_address, change_name ~= false)
+    return {structure = serialize_structure(structure, true), address = resolved_address}
+  end)
 end
 
-_G.__ce_mcp_modules["structure"] = "2026.03.07.1"
-return {ok = true, module = "structure", version = "2026.03.07.1"}
+_G.__ce_mcp_modules["structure"] = "2026.03.08.1"
+return {ok = true, module = "structure", version = "2026.03.08.1"}
 ''',
 )

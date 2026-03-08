@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..context import ToolContext
 from ..registration import ParameterSpec, ToolSpec, register_specs
+from ..runtime.lua_runtime import LUA_RUNTIME
 
 
 def register(server: FastMCP, ctx: ToolContext) -> None:
@@ -59,9 +60,14 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
         ),
         ToolSpec(
             name="ce.run_script_file",
-            description="Load a local Lua script file from disk and execute it inside Cheat Engine.",
+            description="Load a local Lua script file from disk and execute it inside Cheat Engine using loadfile.",
             parameters=(ParameterSpec("path", str), ParameterSpec("session_id", str | None, None)),
-            handler=lambda path, session_id=None: ctx.lua_exec(Path(path).read_text(encoding="utf-8"), session_id=session_id),
+            handler=lambda path, session_id=None: ctx.call_runtime_function(
+                LUA_RUNTIME,
+                "run_file",
+                args=[str(Path(path))],
+                session_id=session_id,
+            ),
         ),
     ]
 

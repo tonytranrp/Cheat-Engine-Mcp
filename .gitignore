@@ -13,5 +13,7 @@ __pycache__/
 *.lib
 *.ilk
 *.pdb
+tests/assets/**/bin/
+tests/assets/**/obj/
 demo_mcp_out.txt
 demo_mcp_err.txt

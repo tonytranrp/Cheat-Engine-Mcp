@@ -17,10 +17,52 @@ It gives Codex a live Cheat Engine backend for process attach, memory access, po
   - `ce.auto_assemble`
   - `ce.lua_call`
 - Broad MCP surface
-  - 150+ MCP tools currently registered
+  - 190+ MCP tools currently registered
   - process, modules, symbols, memory, scans, pointer chains, tables, records, exported SDK fields
 - Raw SDK visibility
   - full copied `ExportedFunctions` block exposed through MCP metadata tools
+
+## What Changed In 0.2.3
+
+This release is the current stabilized state after the recent MCP/backend refactor and live-tool hardening work.
+
+### New API surface
+
+- New scan-session state API:
+  - `ce.scan_get_state`
+- New Lua package/module APIs:
+  - `ce.lua_get_package_paths`
+  - `ce.lua_add_package_path`
+  - `ce.lua_add_package_cpath`
+  - `ce.lua_add_library_root`
+  - `ce.lua_require_module`
+  - `ce.lua_unload_module`
+  - `ce.lua_call_module_function`
+  - `ce.lua_run_file`
+
+### Fixes and behavior changes
+
+- Invalid MCP operations now return structured error payloads instead of opaque one-line failures
+- Scan workflows now enforce order and report safe recovery steps for bad sequencing
+- Structure, dissect, and table helpers run on Cheat Engine's main thread where required
+- `ce.attach_process` is more reliable for name-based attach flows
+- `ce.scan_string` is the preferred text-search path instead of hand-building AOB hex for common string searches
+
+### Tooling and test improvements
+
+- Added live integration harness support in `tests/live_support.py`
+- Added `tools/dev/run-live-tool-suite.py` for grouped live MCP validation
+- Added a small managed `.NET` target under `tests/assets/dotnet_target/` for structure/dissect coverage
+- Added unit coverage for structured MCP error payloads and invalid scan/debug flows
+
+### Repository layout
+
+- Native CE plugin code lives under `native/`
+- Installable MCP backend lives under `python/src/ce_mcp_server/`
+- Dev-only operators and test runners live under `tools/dev/`
+- The loader/core split remains:
+  - `ce_mcp_plugin.dll`: stable Cheat Engine loader
+  - `ce_mcp_plugin_core.dll`: hot-swappable runtime core
 
 ## Quick Start
 
@@ -92,7 +134,7 @@ Codex
 
 ## Tool Surface
 
-Current MCP tool count: `150+`
+Current registered MCP tool count: `192`
 
 ### Native bridge and session tools
 
@@ -121,6 +163,17 @@ Current MCP tool count: `150+`
 - `ce.lua_get_global`
 - `ce.lua_set_global`
 - `ce.run_script_file`
+
+### Lua package and module tools
+
+- `ce.lua_get_package_paths`
+- `ce.lua_add_package_path`
+- `ce.lua_add_package_cpath`
+- `ce.lua_add_library_root`
+- `ce.lua_require_module`
+- `ce.lua_unload_module`
+- `ce.lua_call_module_function`
+- `ce.lua_run_file`
 
 ### ExportedFunctions tools
 
@@ -203,6 +256,7 @@ Representative tools:
 - `ce.scan_destroy_session`
 - `ce.scan_destroy_all_sessions`
 - `ce.scan_list_sessions`
+- `ce.scan_get_state`
 - `ce.scan_first`
 - `ce.scan_next`
 - `ce.scan_wait`
@@ -220,6 +274,48 @@ Representative tools:
 - `ce.scan_once`
 - `ce.scan_value`
 - `ce.scan_string`
+
+## Structured Errors
+
+Invalid MCP operations now return structured guidance instead of only a raw error string.
+
+Typical fields:
+
+- `error`: human-readable summary of what failed
+- `error_code`: stable machine-readable code such as `scan_wait_required`
+- `error_category`: broad class such as `usage` or `state`
+- `hint`: short corrective guidance
+- `details`: structured metadata about the bad input or missing state
+- `next_steps`: ordered recovery actions
+- `required_order`: workflow order when the tool must be used in sequence
+- `example`: a valid example call when one is useful
+- `risk`: why the invalid operation is unsafe or misleading
+
+Example:
+
+```json
+{
+  "ok": false,
+  "error": "A completed first scan is required before this follow-up scan.",
+  "error_code": "scan_first_scan_required",
+  "error_category": "state",
+  "hint": "ce.scan_next_ex refines an existing result set; it does not create the initial one.",
+  "required_order": [
+    "ce.scan_create_session",
+    "ce.scan_first_ex",
+    "ce.scan_wait",
+    "ce.scan_next_ex"
+  ],
+  "example": "ce.scan_first_ex(scan_session_id=\"scan-1\", scan_option=\"exact\", value_type=\"dword\", value=100)"
+}
+```
+
+This is used for:
+
+- invalid scan sequencing such as calling `ce.scan_next_ex` before a completed first scan
+- result collection before `ce.scan_wait`
+- unsupported debugger watch or breakpoint operations
+- bad enum values, encodings, address expressions, and module scopes
 
 ### Cheat table and record tools
 
@@ -249,6 +345,34 @@ Representative tools:
 - `ce.record_set_offsets`
 - `ce.record_get_script`
 - `ce.record_set_script`
+
+### Structure and dissect tools
+
+- `ce.structure_list`
+- `ce.structure_get`
+- `ce.structure_create`
+- `ce.structure_define`
+- `ce.structure_add_element`
+- `ce.structure_fill_from_dotnet`
+- `ce.structure_delete`
+- `ce.dissect_module`
+- `ce.dissect_address`
+- `ce.dissect_get_references`
+- `ce.dissect_get_referenced_strings`
+- `ce.dissect_get_referenced_functions`
+
+### Debug and watch tools
+
+- `ce.debug_status`
+- `ce.debug_start`
+- `ce.debug_continue`
+- `ce.debug_list_breakpoints`
+- `ce.debug_watch_accesses_start`
+- `ce.debug_watch_writes_start`
+- `ce.debug_watch_execute_start`
+- `ce.debug_watch_get_hits`
+- `ce.debug_watch_stop`
+- `ce.debug_watch_stop_all`
 
 ## Example MCP Calls
 
@@ -383,6 +507,28 @@ Loader changes:
 cmake --build build --target ce_mcp_loader_deploy ce_mcp_core
 .\tools\dev\restart-cheat-engine.ps1 -ReloadCore
 ```
+
+## Testing
+
+Unit tests:
+
+```powershell
+py -3.14 -m unittest discover -s tests -v
+```
+
+Live Cheat Engine integration suite:
+
+```powershell
+$env:CE_MCP_RUN_LIVE = "1"
+py -3.14 tools\dev\run-live-tool-suite.py
+```
+
+The live suite expects:
+
+- Cheat Engine running
+- the stable loader plugin enabled
+- a live CE bridge session connected to the backend
+- an attachable target process for memory, scan, and debugger coverage
 
 ## Troubleshooting
 

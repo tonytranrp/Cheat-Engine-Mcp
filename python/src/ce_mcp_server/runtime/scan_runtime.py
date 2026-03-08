@@ -4,7 +4,7 @@ from ..context import RuntimeModule
 
 SCAN_RUNTIME = RuntimeModule(
     name="scan",
-    version="2026.03.07.1",
+    version="2026.03.08.1",
     script=r'''
 _G.__ce_mcp = _G.__ce_mcp or {}
 _G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
@@ -89,6 +89,33 @@ local function destroy_foundlist(session)
   end
 end
 
+local function summarize_session(session)
+  return {
+    session_id = session.id,
+    has_foundlist = session.foundlist ~= nil,
+    only_one_result = session.memscan.OnlyOneResult and true or false,
+    state = session.state or 'created',
+    scan_in_progress = session.scan_in_progress and true or false,
+    has_completed_scan = session.has_completed_scan and true or false,
+    last_scan_kind = session.last_scan_kind,
+    last_result_count = tonumber(session.last_result_count) or 0,
+  }
+end
+
+local function mark_scan_started(session, kind)
+  session.state = kind .. '_started'
+  session.scan_in_progress = true
+  session.has_completed_scan = false
+  session.last_scan_kind = kind
+  session.last_result_count = 0
+end
+
+local function ensure_scan_can_start(session)
+  if session.scan_in_progress then
+    error('scan_sequence_error:wait_required')
+  end
+end
+
 local function serialize_found_results(foundlist, limit)
   local results = {}
   local count = tonumber(foundlist.Count) or 0
@@ -119,6 +146,11 @@ function M.create_session()
     id = session_id,
     memscan = createMemScan(),
     foundlist = nil,
+    state = 'created',
+    scan_in_progress = false,
+    has_completed_scan = false,
+    last_scan_kind = nil,
+    last_result_count = 0,
   }
   return {session_id = session_id}
 end
@@ -143,26 +175,34 @@ end
 function M.list_sessions()
   local sessions = {}
   for session_id, session in pairs(M.sessions) do
-    sessions[#sessions + 1] = {
-      session_id = session_id,
-      has_foundlist = session.foundlist ~= nil,
-      only_one_result = session.memscan.OnlyOneResult and true or false,
-    }
+    sessions[#sessions + 1] = summarize_session(session)
   end
   table.sort(sessions, function(a, b) return a.session_id < b.session_id end)
   return {sessions = sessions}
 end
 
+function M.get_session_state(session_id)
+  local session = ensure_session(session_id)
+  return summarize_session(session)
+end
+
 function M.new_scan(session_id)
   local session = ensure_session(session_id)
+  ensure_scan_can_start(session)
   destroy_foundlist(session)
   session.memscan.newScan()
+  session.state = 'reset'
+  session.scan_in_progress = false
+  session.has_completed_scan = false
+  session.last_scan_kind = nil
+  session.last_result_count = 0
   return {session_id = session_id, reset = true}
 end
 
 function M.first_scan(session_id, options)
   local session = ensure_session(session_id)
   options = options or {}
+  ensure_scan_can_start(session)
   destroy_foundlist(session)
   session.memscan.firstScan(
     normalize(M.scan_options, options.scan_option, soExactValue),
@@ -180,12 +220,17 @@ function M.first_scan(session_id, options)
     options.is_unicode_scan and true or false,
     options.is_case_sensitive and true or false
   )
+  mark_scan_started(session, 'first')
   return {session_id = session_id, started = true}
 end
 
 function M.next_scan(session_id, options)
   local session = ensure_session(session_id)
   options = options or {}
+  if not session.has_completed_scan then
+    error('scan_sequence_error:first_scan_required')
+  end
+  ensure_scan_can_start(session)
   destroy_foundlist(session)
   session.memscan.nextScan(
     normalize(M.scan_options, options.scan_option, soExactValue),
@@ -199,12 +244,22 @@ function M.next_scan(session_id, options)
     options.is_percentage_scan and true or false,
     tostring(options.saved_result_name or '')
   )
+  mark_scan_started(session, 'next')
   return {session_id = session_id, started = true}
 end
 
 function M.wait(session_id)
   local session = ensure_session(session_id)
+  if not session.scan_in_progress then
+    if session.has_completed_scan then
+      return {session_id = session_id, completed = true, already_completed = true}
+    end
+    error('scan_sequence_error:no_active_scan')
+  end
   session.memscan.waitTillDone()
+  session.scan_in_progress = false
+  session.has_completed_scan = true
+  session.state = 'completed'
   return {session_id = session_id, completed = true}
 end
 
@@ -216,26 +271,44 @@ end
 
 function M.attach_foundlist(session_id)
   local session = ensure_session(session_id)
+  if session.scan_in_progress then
+    error('scan_sequence_error:wait_required_before_results')
+  end
   local foundlist = ensure_foundlist(session)
-  return {session_id = session_id, attached = true, count = tonumber(foundlist.Count) or 0}
+  local count = tonumber(foundlist.Count) or 0
+  session.last_result_count = count
+  session.state = 'results_attached'
+  return {session_id = session_id, attached = true, count = count}
 end
 
 function M.detach_foundlist(session_id)
   local session = ensure_session(session_id)
   destroy_foundlist(session)
+  if session.has_completed_scan then
+    session.state = 'completed'
+  end
   return {session_id = session_id, attached = false}
 end
 
 function M.get_result_count(session_id)
   local session = ensure_session(session_id)
+  if session.scan_in_progress then
+    error('scan_sequence_error:wait_required_before_results')
+  end
   local foundlist = ensure_foundlist(session)
-  return {session_id = session_id, count = tonumber(foundlist.Count) or 0}
+  local count = tonumber(foundlist.Count) or 0
+  session.last_result_count = count
+  return {session_id = session_id, count = count}
 end
 
 function M.get_results(session_id, limit)
   local session = ensure_session(session_id)
+  if session.scan_in_progress then
+    error('scan_sequence_error:wait_required_before_results')
+  end
   local foundlist = ensure_foundlist(session)
   local results, count = serialize_found_results(foundlist, limit or 128)
+  session.last_result_count = count
   return {
     session_id = session_id,
     count = count,
@@ -247,6 +320,9 @@ end
 
 function M.save_results(session_id, name)
   local session = ensure_session(session_id)
+  if session.scan_in_progress then
+    error('scan_sequence_error:wait_required_before_results')
+  end
   session.memscan.saveCurrentResults(tostring(name))
   return {session_id = session_id, saved_result_name = tostring(name)}
 end
@@ -259,10 +335,13 @@ end
 
 function M.get_only_result(session_id)
   local session = ensure_session(session_id)
+  if session.scan_in_progress then
+    error('scan_sequence_error:wait_required_before_results')
+  end
   return {session_id = session_id, address = session.memscan.getOnlyResult()}
 end
 
-_G.__ce_mcp_modules["scan"] = "2026.03.07.1"
-return {ok = true, module = "scan", version = "2026.03.07.1"}
+_G.__ce_mcp_modules["scan"] = "2026.03.08.1"
+return {ok = true, module = "scan", version = "2026.03.08.1"}
 ''',
 )

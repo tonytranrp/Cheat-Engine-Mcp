@@ -43,6 +43,18 @@ python .\tools\dev\run-mcp-call.py --port 5556 --tool ce.read_memory --field add
 
 ## Common Errors
 
+Structured tool failures now include helper fields such as:
+
+- `error_code`
+- `hint`
+- `details`
+- `next_steps`
+- `required_order`
+- `example`
+- `risk`
+
+When a tool fails, prefer those fields over the raw `error` string. They are the intended recovery path for invalid orderings, unsupported debugger operations, and bad scan parameters.
+
 ### `MCP client for cheat-engine failed to start: connection closed: initialize response`
 
 Meaning:
