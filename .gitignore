@@ -1,0 +1,17 @@
+build/
+build-*/
+dist/
+.vscode/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+*.egg-info/
+*.obj
+*.dll
+*.exp
+*.lib
+*.ilk
+*.pdb
+demo_mcp_out.txt
+demo_mcp_err.txt

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ce-mcp-server"
+version = "0.2.0"
+description = "MCP server backend for a live Cheat Engine bridge"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.26.0",
+]
+
+[project.scripts]
+ce-mcp-server = "ce_mcp_server.server:main"
+
+[tool.setuptools]
+package-dir = {"" = "python/src"}
+
+[tool.setuptools.packages.find]
+where = ["python/src"]
