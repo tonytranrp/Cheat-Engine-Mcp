@@ -348,11 +348,16 @@ def _annotate_message(tool_name: str, message: str) -> McpToolError:
             example='ce.resolve_symbol(symbol="Minecraft.Windows.exe+1234")',
         )
 
-    if message == "debugger_start_failed":
+    if message.startswith("debugger_start_failed"):
+        requested_interface = message.partition(":")[2] or None
+        details: dict[str, Any] = {}
+        if requested_interface is not None:
+            details["debugger_interface"] = requested_interface
         return ToolStateError(
             "Cheat Engine failed to enter debugging mode for the attached target.",
             code="debugger_start_failed",
             hint="The target may not be attached, the debugger interface may be unsupported, or the process may reject the chosen method.",
+            details=details,
             next_steps=[
                 "Confirm ce.get_attached_process reports the intended target.",
                 "Retry ce.debug_start with debugger_interface=2 first.",

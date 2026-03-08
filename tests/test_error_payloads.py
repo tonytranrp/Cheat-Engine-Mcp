@@ -57,6 +57,18 @@ class DebugBreakpointRejectedContext(FakeToolContext):
         return super().call_runtime_function(runtime, function_name, args=args, session_id=session_id, timeout_seconds=timeout_seconds)
 
 
+class DebugStartRejectedContext(FakeToolContext):
+    def call_runtime_function(self, runtime, function_name, args=None, session_id=None, timeout_seconds=30.0):
+        runtime_name = getattr(runtime, "name", "runtime")
+        if runtime_name == "debug" and function_name == "start":
+            return {
+                "ok": False,
+                "error": "debugger_start_failed:1",
+                "session_id": session_id or "ce-test",
+            }
+        return super().call_runtime_function(runtime, function_name, args=args, session_id=session_id, timeout_seconds=timeout_seconds)
+
+
 class ErrorPayloadTests(unittest.TestCase):
     def test_invalid_scan_string_encoding_returns_guidance(self) -> None:
         server = FakeServer()
@@ -99,6 +111,16 @@ class ErrorPayloadTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_code"], "debug_breakpoint_rejected")
         self.assertIn("required_order", result)
+
+    def test_debug_start_failure_is_annotated_with_interface(self) -> None:
+        server = FakeServer()
+        debug_tools.register(server, DebugStartRejectedContext())
+
+        result = server.tools["ce.debug_start"](debugger_interface=1, session_id="ce-test")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "debugger_start_failed")
+        self.assertEqual(result["details"]["debugger_interface"], "1")
 
 
 if __name__ == "__main__":

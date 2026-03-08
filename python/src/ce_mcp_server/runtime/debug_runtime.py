@@ -4,7 +4,7 @@ from ..context import RuntimeModule
 
 DEBUG_RUNTIME = RuntimeModule(
     name="debug",
-    version="2026.03.07.1",
+    version="2026.03.08.2",
     script=r'''
 _G.__ce_mcp = _G.__ce_mcp or {}
 _G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
@@ -117,6 +117,19 @@ local function serialize_breakpoint_list()
   return breakpoints
 end
 
+local function breakpoint_registered(address)
+  local breakpoints = serialize_breakpoint_list()
+  for _, breakpoint in ipairs(breakpoints) do
+    if breakpoint == address then
+      return true
+    end
+    if type(breakpoint) == 'table' and tonumber(breakpoint.address) == address then
+      return true
+    end
+  end
+  return false
+end
+
 local function serialize_watch(watch, include_hits, limit)
   if watch == nil then
     return nil
@@ -166,10 +179,19 @@ function M.status()
 end
 
 function M.start(interface)
-  if not debug_isDebugging() then
-    debugProcess(tonumber(interface) or 0)
+  local requested_interface = tonumber(interface)
+  if requested_interface == nil then
+    requested_interface = 2
   end
-  return M.status()
+  if not debug_isDebugging() then
+    debugProcess(requested_interface)
+  end
+  if not debug_isDebugging() then
+    error('debugger_start_failed:' .. tostring(requested_interface))
+  end
+  local status = M.status()
+  status.requested_interface = requested_interface
+  return status
 end
 
 function M.continue_execution(continue_option)
@@ -192,11 +214,15 @@ function M.list_breakpoints()
 end
 
 function M.watch_start(address, size, trigger, method, max_hits, auto_continue, debugger_interface)
-  if not debug_isDebugging() then
-    debugProcess(tonumber(debugger_interface) or 0)
+  local requested_interface = tonumber(debugger_interface)
+  if requested_interface == nil then
+    requested_interface = 2
   end
   if not debug_isDebugging() then
-    error('debugger_start_failed')
+    debugProcess(requested_interface)
+  end
+  if not debug_isDebugging() then
+    error('debugger_start_failed:' .. tostring(requested_interface))
   end
 
   local resolved_address = resolve_address(address)
@@ -249,13 +275,17 @@ function M.watch_start(address, size, trigger, method, max_hits, auto_continue, 
   watch.callback = on_breakpoint
   M.watches[watch.id] = watch
 
-  local ok
+  local call_ok, result
   if normalized_method == nil then
-    ok = debug_setBreakpoint(resolved_address, watch.size, normalized_trigger, on_breakpoint)
+    call_ok, result = pcall(debug_setBreakpoint, resolved_address, watch.size, normalized_trigger, on_breakpoint)
   else
-    ok = debug_setBreakpoint(resolved_address, watch.size, normalized_trigger, normalized_method, on_breakpoint)
+    call_ok, result = pcall(debug_setBreakpoint, resolved_address, watch.size, normalized_trigger, normalized_method, on_breakpoint)
   end
-  if not ok then
+  if not call_ok then
+    M.watches[watch.id] = nil
+    error('debug_setBreakpoint_failed')
+  end
+  if result == false and not breakpoint_registered(resolved_address) then
     M.watches[watch.id] = nil
     error('debug_setBreakpoint_failed')
   end
@@ -305,7 +335,7 @@ function M.watch_stop_all()
   return {stopped = stopped, count = #stopped}
 end
 
-_G.__ce_mcp_modules["debug"] = "2026.03.07.1"
-return {ok = true, module = "debug", version = "2026.03.07.1"}
+_G.__ce_mcp_modules["debug"] = "2026.03.08.2"
+return {ok = true, module = "debug", version = "2026.03.08.2"}
 ''',
 )

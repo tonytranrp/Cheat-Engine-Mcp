@@ -24,7 +24,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
             description="Start Cheat Engine debugging on the attached process using the requested debugger interface.",
             runtime=DEBUG_RUNTIME,
             function_name="start",
-            parameters=(ParameterSpec("debugger_interface", int, 0),),
+            parameters=(ParameterSpec("debugger_interface", int, 2),),
         ),
         runtime_tool(
             ctx,
@@ -54,9 +54,9 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 ParameterSpec("method", str | int | None, None),
                 ParameterSpec("max_hits", int, 32),
                 ParameterSpec("auto_continue", bool, True),
-                ParameterSpec("debugger_interface", int, 0),
+                ParameterSpec("debugger_interface", int, 2),
             ),
-            arg_builder=lambda address, size=1, method=None, max_hits=32, auto_continue=True, debugger_interface=0: [
+            arg_builder=lambda address, size=1, method=None, max_hits=32, auto_continue=True, debugger_interface=2: [
                 address,
                 size,
                 "access",
@@ -79,9 +79,9 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 ParameterSpec("method", str | int | None, None),
                 ParameterSpec("max_hits", int, 32),
                 ParameterSpec("auto_continue", bool, True),
-                ParameterSpec("debugger_interface", int, 0),
+                ParameterSpec("debugger_interface", int, 2),
             ),
-            arg_builder=lambda address, size=1, method=None, max_hits=32, auto_continue=True, debugger_interface=0: [
+            arg_builder=lambda address, size=1, method=None, max_hits=32, auto_continue=True, debugger_interface=2: [
                 address,
                 size,
                 "write",
@@ -104,9 +104,9 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 ParameterSpec("method", str | int | None, None),
                 ParameterSpec("max_hits", int, 32),
                 ParameterSpec("auto_continue", bool, True),
-                ParameterSpec("debugger_interface", int, 0),
+                ParameterSpec("debugger_interface", int, 2),
             ),
-            arg_builder=lambda address, size=1, method=None, max_hits=32, auto_continue=True, debugger_interface=0: [
+            arg_builder=lambda address, size=1, method=None, max_hits=32, auto_continue=True, debugger_interface=2: [
                 address,
                 size,
                 "execute",
