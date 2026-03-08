@@ -556,14 +556,29 @@ npm exec --yes . -- --help
 
 ## Release Assets
 
-Expected Windows release assets:
+Versioned Windows release bundles live under `releases/<version>/` in the tagged repo snapshot.
+
+For `v0.2.5`, use:
+
+- `releases/v0.2.5/ce_mcp_plugin.dll`
+- `releases/v0.2.5/ce_mcp_plugin_core.dll`
+- `releases/v0.2.5/cheat-engine-mcp-0.2.5-windows-x64.zip`
+- `releases/v0.2.5/SHA256SUMS.txt`
+
+Each release ZIP contains:
 
 - `ce_mcp_plugin.dll`
 - `ce_mcp_plugin_core.dll`
-- `cheat-engine-mcp-windows-x64.zip`
+- `README.md`
+- `INSTALL.txt`
 
 The loader DLL is the file you register in Cheat Engine.
 The core DLL is the hot-swapped backend module loaded by the loader.
+
+Prebuilt install guide:
+
+- [docs/INSTALL_PREBUILT_WINDOWS.md](docs/INSTALL_PREBUILT_WINDOWS.md)
+- [releases/v0.2.5/README.md](releases/v0.2.5/README.md)
 
 ## Development
 
