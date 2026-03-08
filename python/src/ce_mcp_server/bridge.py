@@ -294,7 +294,7 @@ class CheatEngineBridge:
         response = session.call_tool(tool_name, payload=payload, timeout_seconds=timeout_seconds)
         result: dict[str, Any]
         if response.get("ok") is True:
-            result = dict(response.get("result", {}))
+            result = self._normalize_result_payload(response.get("result"))
             result.setdefault("ok", True)
         else:
             result = {"ok": False, "error": response.get("error", "bridge_call_failed")}
@@ -306,6 +306,14 @@ class CheatEngineBridge:
         if session.info.ce_process_id is not None:
             result["ce_process_id"] = session.info.ce_process_id
         return result
+
+    @staticmethod
+    def _normalize_result_payload(payload: Any) -> dict[str, Any]:
+        if isinstance(payload, dict):
+            return dict(payload)
+        if isinstance(payload, list):
+            return {"items": list(payload)}
+        return {"value": payload}
 
     def _accept_loop(self) -> None:
         assert self._listener is not None

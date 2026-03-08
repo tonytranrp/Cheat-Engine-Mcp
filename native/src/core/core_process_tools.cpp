@@ -323,17 +323,47 @@ std::optional<DWORD> CoreRuntime::Impl::resolve_process_id_by_name(std::string_v
 {
     if (exported_ == nullptr || exported_->getProcessIDFromProcessName == nullptr)
     {
+        try
+        {
+            const auto processes = list_processes(std::numeric_limits<std::size_t>::max());
+            for (const auto& process : processes.processes)
+            {
+                if (equals_case_insensitive(process.process_name, process_name))
+                {
+                    return process.process_id;
+                }
+            }
+        }
+        catch (...)
+        {
+        }
+
         return std::nullopt;
     }
 
     std::string mutable_name(process_name);
     const DWORD process_id = exported_->getProcessIDFromProcessName(mutable_name.data());
-    if (process_id == 0)
+    if (process_id != 0)
     {
-        return std::nullopt;
+        return process_id;
     }
 
-    return process_id;
+    try
+    {
+        const auto processes = list_processes(std::numeric_limits<std::size_t>::max());
+        for (const auto& process : processes.processes)
+        {
+            if (equals_case_insensitive(process.process_name, process_name))
+            {
+                return process.process_id;
+            }
+        }
+    }
+    catch (...)
+    {
+    }
+
+    return std::nullopt;
 }
 
 std::string CoreRuntime::Impl::filename_component(std::string_view path_text)

@@ -17,12 +17,17 @@ It gives Codex a live Cheat Engine backend for process attach, memory access, po
   - `ce.auto_assemble`
   - `ce.lua_call`
 - Broad MCP surface
-  - 151 MCP tools currently registered
+  - 150+ MCP tools currently registered
   - process, modules, symbols, memory, scans, pointer chains, tables, records, exported SDK fields
 - Raw SDK visibility
   - full copied `ExportedFunctions` block exposed through MCP metadata tools
 
 ## Quick Start
+
+### Documentation
+
+- Setup and usage: [README.md](README.md)
+- Troubleshooting and manual recovery: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ### Codex install command
 
@@ -30,6 +35,15 @@ GitHub-backed `npx` command:
 
 ```powershell
 codex mcp add cheat-engine npx -y github:tonytranrp/Cheat-Engine-Mcp
+```
+
+If the packaged `npx` launcher is unstable on your machine, use the direct Python backend instead:
+
+```toml
+[mcp_servers.cheat-engine]
+command = 'C:\Path\To\Python\python.exe'
+args = ["-m", "ce_mcp_server"]
+startup_timeout_sec = 120
 ```
 
 Local installed command:
@@ -78,7 +92,7 @@ Codex
 
 ## Tool Surface
 
-Current MCP tool count: `151`
+Current MCP tool count: `150+`
 
 ### Native bridge and session tools
 
@@ -200,6 +214,12 @@ Representative tools:
 - `ce.scan_save_results`
 - `ce.scan_set_only_one_result`
 - `ce.scan_get_only_result`
+- `ce.scan_first_ex`
+- `ce.scan_next_ex`
+- `ce.scan_collect`
+- `ce.scan_once`
+- `ce.scan_value`
+- `ce.scan_string`
 
 ### Cheat table and record tools
 
@@ -267,6 +287,24 @@ Create a scan session and inspect CE scan enums:
 ```text
 ce.scan_list_enums()
 ce.scan_create_session()
+```
+
+Search for a plain or wide string without hand-building AOB hex:
+
+```text
+ce.scan_string(text="inventory", encoding="both", module_name="Minecraft.Windows.exe")
+```
+
+Run a one-shot typed value scan:
+
+```text
+ce.scan_value(value=100, value_type="dword", scan_option="exact")
+```
+
+Run a one-shot generic CE memscan with explicit scan semantics:
+
+```text
+ce.scan_once(scan_option="exact", value_type="string", value="slot", module_name="Minecraft.Windows.exe")
 ```
 
 Create a temporary table record:
@@ -345,6 +383,24 @@ Loader changes:
 cmake --build build --target ce_mcp_loader_deploy ce_mcp_core
 .\tools\dev\restart-cheat-engine.ps1 -ReloadCore
 ```
+
+## Troubleshooting
+
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for:
+
+- Codex MCP startup failures
+- wrong DLL / x86-x64 mismatch problems
+- no-session / no-bridge cases
+- long-scan timeout recovery
+- manual bridge smoke tests
+- core hot-reload vs loader restart workflows
+- bug report checklist
+
+Short version:
+
+- use `ce.aob_scan` for raw byte patterns
+- use `ce.scan_string` for text
+- use `ce.scan_value` or `ce.scan_once` for CE memscan-style typed value scans
 
 ## Notes
 
