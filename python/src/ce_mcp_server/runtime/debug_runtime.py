@@ -4,7 +4,7 @@ from ..context import RuntimeModule
 
 DEBUG_RUNTIME = RuntimeModule(
     name="debug",
-    version="2026.03.08.3",
+    version="2026.03.08.4",
     script=r'''
 _G.__ce_mcp = _G.__ce_mcp or {}
 _G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
@@ -171,6 +171,115 @@ local function collect_active_watches()
   return active_watches
 end
 
+local function compare_serialized_breakpoints(left, right)
+  local left_address = tonumber(left.address) or -1
+  local right_address = tonumber(right.address) or -1
+  if left_address ~= right_address then
+    return left_address < right_address
+  end
+
+  local left_source = tostring(left.source or '')
+  local right_source = tostring(right.source or '')
+  if left_source ~= right_source then
+    return left_source < right_source
+  end
+
+  return tostring(left.watch_id or '') < tostring(right.watch_id or '')
+end
+
+local function serialize_effective_raw_breakpoint(entry)
+  local result = {
+    source = 'ce_raw_breakpoint',
+    reported_by_ce = true,
+  }
+
+  if type(entry) == 'number' then
+    result.address = entry
+    return result
+  end
+
+  if type(entry) == 'table' then
+    for key, value in pairs(entry) do
+      result[key] = value
+    end
+    if result.address == nil then
+      result.address = tonumber(entry.address)
+    end
+    return result
+  end
+
+  result.value = entry
+  return result
+end
+
+local function serialize_active_watch_breakpoint(watch, raw_visible)
+  return {
+    source = 'ce_mcp_watch',
+    watch_id = watch.id,
+    address = watch.address,
+    size = watch.size,
+    trigger = watch.trigger_name,
+    method = watch.method_name,
+    active = watch.active and true or false,
+    max_hits = watch.max_hits,
+    hit_count = #watch.hits,
+    debugger_interface = watch.debugger_interface,
+    reported_by_ce = raw_visible and true or false,
+  }
+end
+
+local function summarize_effective_breakpoints()
+  local raw_entries = serialize_breakpoint_list()
+  local raw_breakpoints = {}
+  local raw_address_counts = {}
+  for _, entry in ipairs(raw_entries) do
+    raw_breakpoints[#raw_breakpoints + 1] = serialize_effective_raw_breakpoint(entry)
+    local address = nil
+    if type(entry) == 'number' then
+      address = entry
+    elseif type(entry) == 'table' then
+      address = tonumber(entry.address)
+    end
+    if address ~= nil then
+      raw_address_counts[address] = (raw_address_counts[address] or 0) + 1
+    end
+  end
+
+  local active_watches = collect_active_watches()
+  local watch_breakpoints = {}
+  local active_watch_addresses = {}
+  for _, watch in ipairs(active_watches) do
+    active_watch_addresses[watch.address] = (active_watch_addresses[watch.address] or 0) + 1
+    watch_breakpoints[#watch_breakpoints + 1] = serialize_active_watch_breakpoint(
+      watch,
+      (raw_address_counts[watch.address] or 0) > 0
+    )
+  end
+  table.sort(watch_breakpoints, compare_serialized_breakpoints)
+
+  local effective_breakpoints = {}
+  for _, watch_breakpoint in ipairs(watch_breakpoints) do
+    effective_breakpoints[#effective_breakpoints + 1] = watch_breakpoint
+  end
+  for _, raw_breakpoint in ipairs(raw_breakpoints) do
+    local address = tonumber(raw_breakpoint.address)
+    if address == nil or (active_watch_addresses[address] or 0) == 0 then
+      effective_breakpoints[#effective_breakpoints + 1] = raw_breakpoint
+    end
+  end
+  table.sort(effective_breakpoints, compare_serialized_breakpoints)
+
+  return {
+    count = #effective_breakpoints,
+    breakpoints = effective_breakpoints,
+    raw_count = #raw_breakpoints,
+    raw_breakpoints = raw_breakpoints,
+    active_watch_count = #watch_breakpoints,
+    watch_breakpoints = watch_breakpoints,
+    count_strategy = 'effective',
+  }
+end
+
 local function rebuild_active_breakpoints(interface_hint)
   if type(detachIfPossible) == 'function' then
     pcall(detachIfPossible)
@@ -246,6 +355,7 @@ end
 
 function M.status()
   sync_breakpoints_if_needed()
+  local breakpoint_summary = summarize_effective_breakpoints()
   local watches = {}
   for _, watch in pairs(M.watches) do
     watches[#watches + 1] = serialize_watch(watch, false)
@@ -257,8 +367,13 @@ function M.status()
     can_break = debug_canBreak() and true or false,
     is_broken = debug_isBroken() and true or false,
     current_interface = debug_getCurrentDebuggerInterface(),
-    breakpoint_count = #serialize_breakpoint_list(),
-    breakpoints = serialize_breakpoint_list(),
+    breakpoint_count = breakpoint_summary.count,
+    breakpoints = breakpoint_summary.breakpoints,
+    raw_breakpoint_count = breakpoint_summary.raw_count,
+    raw_breakpoints = breakpoint_summary.raw_breakpoints,
+    active_watch_count = breakpoint_summary.active_watch_count,
+    watch_breakpoints = breakpoint_summary.watch_breakpoints,
+    breakpoint_count_strategy = breakpoint_summary.count_strategy,
     watches = watches,
   }
 end
@@ -284,11 +399,7 @@ end
 
 function M.list_breakpoints()
   sync_breakpoints_if_needed()
-  local breakpoints = serialize_breakpoint_list()
-  return {
-    count = #breakpoints,
-    breakpoints = breakpoints,
-  }
+  return summarize_effective_breakpoints()
 end
 
 function M.watch_start(address, size, trigger, method, max_hits, auto_continue, debugger_interface)
@@ -408,7 +519,7 @@ function M.watch_stop_all()
   return {stopped = stopped, count = #stopped}
 end
 
-_G.__ce_mcp_modules["debug"] = "2026.03.08.3"
-return {ok = true, module = "debug", version = "2026.03.08.3"}
+_G.__ce_mcp_modules["debug"] = "2026.03.08.4"
+return {ok = true, module = "debug", version = "2026.03.08.4"}
 ''',
 )

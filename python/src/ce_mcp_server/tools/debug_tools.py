@@ -13,7 +13,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
         runtime_tool(
             ctx,
             name="ce.debug_status",
-            description="Return Cheat Engine debugger state, breakpoint list, and active CE MCP watch sessions.",
+            description="Return Cheat Engine debugger state plus an effective breakpoint view that includes CE MCP watches and the raw CE breakpoint list.",
             runtime=DEBUG_RUNTIME,
             function_name="status",
             parameters=(),
@@ -37,7 +37,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
         runtime_tool(
             ctx,
             name="ce.debug_list_breakpoints",
-            description="List Cheat Engine breakpoints currently registered in the debugger.",
+            description="List effective active breakpoints, including CE MCP hardware watches that may not appear in Cheat Engine's raw breakpoint list.",
             runtime=DEBUG_RUNTIME,
             function_name="list_breakpoints",
             parameters=(),

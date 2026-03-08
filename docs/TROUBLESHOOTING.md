@@ -166,6 +166,19 @@ Notes:
 - native `ce.query_memory_map` and native AOB scans now return `timed_out` and `truncated` when they hit the internal budget instead of running forever
 - `ce.dissect_module` is now chunked, but a large target can still take time if you choose a very broad scope
 
+### `ce.debug_list_breakpoints` shows fewer breakpoints than the watches you started
+
+Meaning:
+
+- Cheat Engine's raw `debug_getBreakpointList()` output can omit hardware-register access/write watches
+
+Fix:
+
+- on `v0.2.9+`, use:
+  - `count` / `breakpoints` for the effective active breakpoint view
+  - `raw_count` / `raw_breakpoints` for the direct CE raw view
+  - `active_watch_count` / `watch_breakpoints` for CE MCP-managed watch registrations
+
 ### `MCP startup incomplete (failed: ida-local, cheat-engine)`
 
 Meaning:

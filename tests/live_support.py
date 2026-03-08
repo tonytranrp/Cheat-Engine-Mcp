@@ -998,7 +998,7 @@ return { base = base }
             address=self.dotnet_target.health_address,
             size=4,
             method="debug_register",
-            max_hits=16,
+            max_hits=128,
             auto_continue=True,
             debugger_interface=2,
         )
@@ -1007,7 +1007,7 @@ return { base = base }
             address=self.dotnet_target.coins_address,
             size=8,
             method="debug_register",
-            max_hits=16,
+            max_hits=128,
             auto_continue=True,
             debugger_interface=2,
         )
@@ -1017,7 +1017,7 @@ return { base = base }
             address=int(sleep_ex["address"]),
             size=1,
             method="int3",
-            max_hits=16,
+            max_hits=128,
             auto_continue=True,
             debugger_interface=2,
         )
@@ -1038,11 +1038,23 @@ return { base = base }
             raise AssertionError("ce.debug_watch_execute_start did not capture any hits")
 
         breakpoints_before_stop = self._call("ce.debug_list_breakpoints")
+        if int(breakpoints_before_stop["count"]) < 3:
+            raise AssertionError(
+                f"ce.debug_list_breakpoints did not include the active watch set: {breakpoints_before_stop}"
+            )
+        if int(breakpoints_before_stop["active_watch_count"]) < 3:
+            raise AssertionError(
+                f"ce.debug_list_breakpoints did not report active_watch_count correctly: {breakpoints_before_stop}"
+            )
         self._call("ce.debug_watch_stop", watch_id=execute_watch_id)
         breakpoints_after_stop = self._call("ce.debug_list_breakpoints")
         if int(breakpoints_after_stop["count"]) >= int(breakpoints_before_stop["count"]):
             raise AssertionError(
                 "ce.debug_watch_stop did not reduce the live breakpoint count"
+            )
+        if int(breakpoints_after_stop["active_watch_count"]) != 2:
+            raise AssertionError(
+                f"ce.debug_watch_stop left the wrong active_watch_count: {breakpoints_after_stop}"
             )
 
         self._safe_call("ce.debug_watch_get_hits", watch_id="ce-missing-watch", limit=8)
@@ -1052,6 +1064,10 @@ return { base = base }
         if int(breakpoints_after_stop_all["count"]) != 0:
             raise AssertionError(
                 f"ce.debug_watch_stop_all left live breakpoints behind: {breakpoints_after_stop_all['breakpoints']}"
+            )
+        if int(breakpoints_after_stop_all["raw_count"]) != 0 or int(breakpoints_after_stop_all["active_watch_count"]) != 0:
+            raise AssertionError(
+                f"ce.debug_watch_stop_all did not clear raw/effective breakpoint state: {breakpoints_after_stop_all}"
             )
         self._call("ce.attach_process", process_name=self.primary_process_name)
 

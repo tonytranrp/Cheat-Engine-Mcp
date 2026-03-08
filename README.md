@@ -22,35 +22,30 @@ It gives Codex a live Cheat Engine backend for process attach, memory access, po
 - Raw SDK visibility
   - full copied `ExportedFunctions` block exposed through MCP metadata tools
 
-## What Changed In 0.2.8
+## What Changed In 0.2.9
 
-This pass hardens the freeze-prone bridge paths, moves native request handling onto a parallel worker queue, and makes the slowest memory/dissect workflows fail fast instead of wedging the whole CE session.
+This pass fixes debugger breakpoint visibility so the debug/watch tools report the effective active watch state instead of only mirroring Cheat Engine's inconsistent raw breakpoint list.
 
 ### Fixes and behavior changes
 
-- The native CE bridge client no longer runs tool calls on the socket thread. Incoming `call` messages are queued and processed by a small worker pool, so one long request stops blocking unrelated reads, Lua calls, and bounded scans.
-- `ce.query_memory_map` and native AOB scans now honor an internal deadline from the MCP timeout budget and return `timed_out` plus `truncated` instead of running until the client gives up.
-- Python-side bridge timeouts now poison the stuck CE session on purpose. A timed-out request closes the session so later calls do not pile up forever behind a wedged operation.
-- `ce.dissect_module` no longer does one monolithic `DissectCode` pass over the full module. It resolves committed executable regions, chunks them, and feeds them to `ce.dissect_region` under a rolling timeout budget.
-- Same-target `ce.attach_process` remains on the faster short-circuit path, which keeps repeated attach-heavy workflows cheap during validation and scripting loops.
-- The live validation harness now restores detached bridge listeners with `--transport bridge-only` instead of trying to relaunch a background stdio server that immediately exits.
-- The dev harness now refuses to tear down a stdio-backed `ce_mcp_server` process when `--manage-existing-backend` would sever an active MCP client transport.
+- `ce.debug_list_breakpoints.count` now reports the effective active breakpoint/watch set, including CE MCP access and write watches created through hardware-register methods.
+- `ce.debug_list_breakpoints.raw_count` and `ce.debug_list_breakpoints.raw_breakpoints` preserve the unmodified `debug_getBreakpointList()` output from Cheat Engine for low-level debugging.
+- `ce.debug_list_breakpoints.active_watch_count` and `ce.debug_list_breakpoints.watch_breakpoints` expose the active CE MCP watch registrations directly, even when Cheat Engine does not show them in the raw breakpoint list.
+- `ce.debug_status` now uses the same effective/raw split, so its `breakpoint_count` matches the debug/watch tools users actually started.
+- Watch teardown from `0.2.8` remains in place, so `ce.debug_watch_stop` and `ce.debug_watch_stop_all` now clear both the effective count and the raw CE-visible breakpoint state reliably.
 
 ### Tooling and test improvements
 
-- Unit coverage now exercises timeout-session teardown, bridge-only restore behavior, and the new stdio-backend safety guard in the live harness.
-- Full live suite against `Minecraft.Windows.exe`: `210/210` tools passed in `18.37s`.
-- Focused live timings from the latest Minecraft benchmark:
-  - `ce.attach_process(same target)`: avg `14.06 ms`
-  - `ce.verify_target`: avg `9.004 ms`
-  - `ce.normalize_address`: avg `1.364 ms`
-  - `ce.read_integer`: avg `0.874 ms`
-  - `ce.structure_read`: avg `3.297 ms`
-  - `ce.scan_once`: avg `38.623 ms`
-  - `ce.aob_scan(range,x16)`: avg `0.61 ms`
-  - `ce.scan_string(range,ascii)`: avg `0.614 ms`
-  - `parallel_mixed_light`: `24` calls across `8` workers in `24.502 ms` wall time
-- Full details for this pass live in `docs/TIMEOUT_AND_PARALLEL_EXECUTION_REWRITE_2026-03-08.md`.
+- `py -3 -m unittest discover -s tests -v` passed.
+- Focused live debugger validation on the reopened Cheat Engine session passed:
+  - `ce.debug_watch_accesses_start`: captured repeated live hits
+  - `ce.debug_watch_writes_start`: captured repeated live hits
+  - `ce.debug_watch_execute_start`: captured repeated live hits
+  - `ce.debug_list_breakpoints` after starting all three watches: `count=3`, `active_watch_count=3`
+  - `ce.debug_watch_stop` reduced the effective count to `2`
+  - `ce.debug_watch_stop_all` reduced both `count` and `raw_count` to `0`
+- Full live suite against `Minecraft.Windows.exe`: `210/210` tools passed in `20.28s`.
+- Full details for this pass live in `docs/DEBUG_BREAKPOINT_VISIBILITY_FIX_2026-03-08.md`. The previous freeze/timeout rewrite remains documented in `docs/TIMEOUT_AND_PARALLEL_EXECUTION_REWRITE_2026-03-08.md`.
 
 ### Repository layout
 
@@ -396,6 +391,12 @@ This is used for:
 - `ce.debug_watch_stop`
 - `ce.debug_watch_stop_all`
 
+`ce.debug_list_breakpoints` and `ce.debug_status` now report an effective breakpoint view by default:
+
+- `count` / `breakpoints`: active CE MCP watches plus any extra raw CE breakpoints
+- `raw_count` / `raw_breakpoints`: the direct `debug_getBreakpointList()` result from Cheat Engine
+- `active_watch_count` / `watch_breakpoints`: CE MCP-tracked active watch registrations
+
 ## Example MCP Calls
 
 Attach Cheat Engine to a target by name:
@@ -568,12 +569,12 @@ npm exec --yes . -- --help
 
 Versioned Windows release bundles live under `releases/<version>/` in the tagged repo snapshot.
 
-For `v0.2.8`, use:
+For `v0.2.9`, use:
 
-- `releases/v0.2.8/ce_mcp_plugin.dll`
-- `releases/v0.2.8/ce_mcp_plugin_core.dll`
-- `releases/v0.2.8/cheat-engine-mcp-0.2.8-windows-x64.zip`
-- `releases/v0.2.8/SHA256SUMS.txt`
+- `releases/v0.2.9/ce_mcp_plugin.dll`
+- `releases/v0.2.9/ce_mcp_plugin_core.dll`
+- `releases/v0.2.9/cheat-engine-mcp-0.2.9-windows-x64.zip`
+- `releases/v0.2.9/SHA256SUMS.txt`
 
 Each release ZIP contains:
 
@@ -588,7 +589,7 @@ The core DLL is the hot-swapped backend module loaded by the loader.
 Prebuilt install guide:
 
 - [docs/INSTALL_PREBUILT_WINDOWS.md](docs/INSTALL_PREBUILT_WINDOWS.md)
-- [releases/v0.2.8/README.md](releases/v0.2.8/README.md)
+- [releases/v0.2.9/README.md](releases/v0.2.9/README.md)
 
 ## Development
 
