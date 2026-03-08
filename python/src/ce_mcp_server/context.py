@@ -14,6 +14,54 @@ class RuntimeModule:
     script: str
 
 
+CORE_RUNTIME = RuntimeModule(
+    name="core",
+    version="2026.03.08.1",
+    script=r'''
+_G.__ce_mcp = _G.__ce_mcp or {}
+_G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
+local root = _G.__ce_mcp
+root.core = root.core or {}
+local M = root.core
+
+local unpack_fn = table.unpack or unpack
+
+function M.call_global(function_name, args, result_field)
+  local normalized_name = tostring(function_name or '')
+  local fn = rawget(_G, normalized_name)
+  if type(fn) ~= 'function' then
+    error('missing_lua_function:' .. normalized_name)
+  end
+
+  local normalized_result_field = tostring(result_field or 'value')
+  return {
+    [normalized_result_field] = fn(unpack_fn(args or {}))
+  }
+end
+
+function M.call_runtime(module_name, function_name, args)
+  local normalized_module = tostring(module_name or '')
+  local normalized_function = tostring(function_name or '')
+
+  local module = root[normalized_module]
+  if type(module) ~= 'table' then
+    error('ce_mcp_runtime_module_missing:' .. normalized_module)
+  end
+
+  local fn = module[normalized_function]
+  if type(fn) ~= 'function' then
+    error('ce_mcp_runtime_function_missing:' .. normalized_module .. '.' .. normalized_function)
+  end
+
+  return fn(unpack_fn(args or {}))
+end
+
+_G.__ce_mcp_modules["core"] = "2026.03.08.1"
+return {ok = true, module = "core", version = "2026.03.08.1"}
+''',
+)
+
+
 class ToolContext:
     def __init__(self, bridge_getter: Callable[[], CheatEngineBridge]) -> None:
         self._bridge_getter = bridge_getter
@@ -95,13 +143,19 @@ class ToolContext:
                           session_id: str | None = None,
                           result_field: str = "value",
                           timeout_seconds: float = 30.0) -> dict[str, Any]:
-        rendered_args = ", ".join(self.to_lua_literal(value) for value in (args or []))
+        resolved_session = self.resolve_session_id(session_id)
+        try:
+            self.ensure_runtime_module(CORE_RUNTIME, resolved_session)
+        except BridgeError as exc:
+            return {"ok": False, "error": str(exc), "session_id": resolved_session}
+
         script = (
-            f"local __ce_mcp_fn = rawget(_G, {self.to_lua_literal(function_name)})\n"
-            f"if type(__ce_mcp_fn) ~= 'function' then error('missing_lua_function:{function_name}') end\n"
-            f"return {{{result_field} = __ce_mcp_fn({rendered_args})}}"
+            f"return __ce_mcp.core.call_global("
+            f"{self.to_lua_literal(function_name)}, "
+            f"{self.to_lua_literal(list(args or []))}, "
+            f"{self.to_lua_literal(result_field)})"
         )
-        return self.lua_exec(script, session_id=session_id, timeout_seconds=timeout_seconds)
+        return self.lua_exec(script, session_id=resolved_session, timeout_seconds=timeout_seconds)
 
     def call_runtime_function(self,
                               runtime: RuntimeModule,
@@ -111,19 +165,17 @@ class ToolContext:
                               timeout_seconds: float = 30.0) -> dict[str, Any]:
         resolved_session = self.resolve_session_id(session_id)
         try:
-            self.ensure_runtime_module(runtime, resolved_session)
+            self.ensure_runtime_module(CORE_RUNTIME, resolved_session)
+            if runtime.name != CORE_RUNTIME.name:
+                self.ensure_runtime_module(runtime, resolved_session)
         except BridgeError as exc:
             return {"ok": False, "error": str(exc), "session_id": resolved_session}
 
-        rendered_args = ", ".join(self.to_lua_literal(value) for value in (args or []))
         script = (
-            f"local __ce_mcp_root = rawget(_G, '__ce_mcp')\n"
-            f"if type(__ce_mcp_root) ~= 'table' then error('ce_mcp_runtime_missing') end\n"
-            f"local __ce_mcp_module = __ce_mcp_root[{self.to_lua_literal(runtime.name)}]\n"
-            f"if type(__ce_mcp_module) ~= 'table' then error('ce_mcp_runtime_module_missing:{runtime.name}') end\n"
-            f"local __ce_mcp_fn = __ce_mcp_module[{self.to_lua_literal(function_name)}]\n"
-            f"if type(__ce_mcp_fn) ~= 'function' then error('ce_mcp_runtime_function_missing:{runtime.name}.{function_name}') end\n"
-            f"return __ce_mcp_fn({rendered_args})"
+            f"return __ce_mcp.core.call_runtime("
+            f"{self.to_lua_literal(runtime.name)}, "
+            f"{self.to_lua_literal(function_name)}, "
+            f"{self.to_lua_literal(list(args or []))})"
         )
         return self.lua_exec(script, session_id=resolved_session, timeout_seconds=timeout_seconds)
 

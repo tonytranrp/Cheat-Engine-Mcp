@@ -29,6 +29,20 @@ Expected result:
 
 If this works, the CE plugin is alive and the problem is on the MCP backend or Codex side.
 
+### Run the repo live suite against a specific game
+
+For development validation, the live suite can target a custom process instead of the default smoke target:
+
+```powershell
+py -3 .\tools\dev\run-live-tool-suite.py --process-name "Tic-tak-toe.exe"
+```
+
+You can also set:
+
+```powershell
+$env:CE_MCP_PRIMARY_PROCESS = "Tic-tak-toe.exe"
+```
+
 ### List loaded modules from the current target
 
 ```powershell
@@ -171,6 +185,80 @@ If direct bridge calls work but Codex MCP calls fail:
 - the problem is in the MCP backend or Codex registration
 - the CE plugin is not the problem
 - from Codex or any MCP client, use `ce.verify_target` as the fastest full-stack sanity check
+
+### `ce.structure_read` returns empty fields or obvious nulls
+
+Meaning:
+
+- the structure definition exists, but the address is wrong
+- or the field layout does not match the live target object
+
+Checks:
+
+1. Confirm the target is attached with `ce.verify_target`
+2. Resolve the base expression first with `ce.normalize_address`
+3. Verify the structure definition with `ce.structure_get`
+4. If needed, rebuild the structure from a live address with `ce.structure_auto_guess`
+
+Recommended pattern:
+
+```text
+ce.verify_target()
+ce.normalize_address(address="Tic-tak-toe.exe+1202E0")
+ce.structure_read(name="Field", address="Tic-tak-toe.exe+1202E0", max_depth=2, include_raw=True)
+```
+
+Important:
+
+- `ce.structure_read` does not guess offsets on its own
+- it reads a live instance using the current CE structure definition
+- if a child element is declared as a pointer-to-structure, the tool will dereference it and recurse until `max_depth`
+
+### Lua `require` still cannot find my external library
+
+Meaning:
+
+- the Lua package environment inside Cheat Engine does not include the directory or DLL search path you expect
+
+Checks:
+
+1. Inspect the active search environment with `ce.lua_get_environment`
+2. Add or replace search paths with `ce.lua_configure_environment`
+3. For one-off source modules, preload them with `ce.lua_preload_module` or `ce.lua_preload_file`
+
+Recommended pattern:
+
+```text
+ce.lua_configure_environment(
+  library_roots=["C:/ce-libs"],
+  package_paths=["C:/ce-libs/?.lua", "C:/ce-libs/?/init.lua"],
+  package_cpaths=["C:/ce-libs/?.dll"],
+  prepend=True,
+)
+```
+
+Important:
+
+- `ce.lua_add_library_root` expands to Lua `package.path` and `package.cpath` conventions, but it does not remove stale entries
+- use `ce.lua_remove_package_path` and `ce.lua_remove_package_cpath` when cleaning up a polluted session
+- `ce.lua_preload_module` and `ce.lua_preload_file` bypass path lookup entirely and are the fastest option for controlled module injection
+
+### Repeated Lua/runtime calls feel slower than expected after editing the backend
+
+Meaning:
+
+- the running MCP backend is still using an older Python process or older cached runtime module
+
+Fixes:
+
+- restart the `ce_mcp_server` process after pulling new backend code
+- reconnect Cheat Engine if you changed runtime module versions and want a clean session
+- run `ce.verify_target` once after reconnecting to confirm the bridge is stable
+
+Important:
+
+- `0.2.5` caches a CE-side dispatcher per session for lower steady-state latency
+- if you are still seeing pre-`0.2.5` behavior, the most likely issue is a stale backend process
 
 ### AOB scans time out
 

@@ -4,13 +4,15 @@ from ..context import RuntimeModule
 
 STRUCTURE_RUNTIME = RuntimeModule(
     name="structure",
-    version="2026.03.08.1",
+    version="2026.03.08.2",
     script=r'''
 _G.__ce_mcp = _G.__ce_mcp or {}
 _G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
 local root = _G.__ce_mcp
 root.structure = root.structure or {}
 local M = root.structure
+
+local unpack_fn = table.unpack or unpack
 
 local function run_on_main_thread(fn)
   local ok, result = false, nil
@@ -23,17 +25,80 @@ local function run_on_main_thread(fn)
   return result
 end
 
+local function trim_ascii(value)
+  local text = tostring(value or '')
+  text = text:gsub('^%s+', '')
+  text = text:gsub('%s+$', '')
+  return text
+end
+
+local function normalize_key(value)
+  return trim_ascii(value):lower():gsub('[%s_%-%(%)]', '')
+end
+
+local function bytes_to_hex(bytes)
+  local parts = {}
+  for _, value in ipairs(bytes or {}) do
+    parts[#parts + 1] = string.format('%02X', tonumber(value) or 0)
+  end
+  return table.concat(parts, ' ')
+end
+
+local function safe_call(fn, ...)
+  local args = {...}
+  local ok, result = pcall(function()
+    return fn(unpack_fn(args))
+  end)
+  if not ok then
+    return nil
+  end
+  return result
+end
+
+local function safe_read_bytes(address, count)
+  return safe_call(readBytes, address, count, true)
+end
+
+local function safe_read_string(address, max_length, wide)
+  return safe_call(readString, address, max_length, wide and true or false)
+end
+
 local VALUE_TYPES = {
   byte = vtByte,
+  ["1byte"] = vtByte,
+  ["1bytes"] = vtByte,
   word = vtWord,
+  ["2byte"] = vtWord,
+  ["2bytes"] = vtWord,
   dword = vtDword,
+  ["4byte"] = vtDword,
+  ["4bytes"] = vtDword,
   qword = vtQword,
+  ["8byte"] = vtQword,
+  ["8bytes"] = vtQword,
   float = vtSingle,
+  single = vtSingle,
   double = vtDouble,
   string = vtString,
   bytearray = vtByteArray,
+  arrayofbyte = vtByteArray,
+  bytes = vtByteArray,
+  aob = vtByteArray,
   binary = vtBinary,
   pointer = vtPointer,
+}
+
+local VALUE_TYPE_NAMES = {
+  [vtByte] = 'byte',
+  [vtWord] = 'word',
+  [vtDword] = 'dword',
+  [vtQword] = 'qword',
+  [vtSingle] = 'float',
+  [vtDouble] = 'double',
+  [vtString] = 'string',
+  [vtByteArray] = 'bytearray',
+  [vtBinary] = 'binary',
+  [vtPointer] = 'pointer',
 }
 
 local function normalize_vartype(value)
@@ -43,7 +108,7 @@ local function normalize_vartype(value)
   if type(value) == 'number' then
     return value
   end
-  local key = string.lower(tostring(value))
+  local key = normalize_key(value)
   if VALUE_TYPES[key] == nil then
     error('invalid_structure_vartype:' .. key)
   end
@@ -154,6 +219,140 @@ local function resolve_child_structure(options)
   end
 
   return nil
+end
+
+local function default_bytesize_for_vartype(vartype, explicit_bytesize)
+  local size = tonumber(explicit_bytesize) or 0
+  if size > 0 then
+    return size
+  end
+  if vartype == vtByte then return 1 end
+  if vartype == vtWord then return 2 end
+  if vartype == vtDword or vartype == vtSingle then return 4 end
+  if vartype == vtQword or vartype == vtDouble then return 8 end
+  if vartype == vtPointer then
+    return targetIs64Bit() and 8 or 4
+  end
+  if vartype == vtString then return 64 end
+  if vartype == vtByteArray or vartype == vtBinary then return 16 end
+  return 8
+end
+
+local function read_scalar_value(vartype, address, bytesize)
+  if vartype == vtByte then
+    local bytes = safe_read_bytes(address, 1)
+    return bytes and bytes[1] or nil, 'integer'
+  end
+  if vartype == vtWord then
+    return safe_call(readSmallInteger, address), 'integer'
+  end
+  if vartype == vtDword then
+    return safe_call(readInteger, address), 'integer'
+  end
+  if vartype == vtQword then
+    return safe_call(readQword, address), 'integer'
+  end
+  if vartype == vtSingle then
+    return safe_call(readFloat, address), 'float'
+  end
+  if vartype == vtDouble then
+    return safe_call(readDouble, address), 'double'
+  end
+  if vartype == vtPointer then
+    return safe_call(readPointer, address), 'pointer'
+  end
+  if vartype == vtString then
+    local max_length = default_bytesize_for_vartype(vartype, bytesize)
+    local ascii = safe_read_string(address, max_length, false)
+    local wide = safe_read_string(address, max_length, true)
+    if ascii ~= nil and wide ~= nil and ascii ~= wide and wide ~= '' then
+      return {ascii = ascii, wide = wide}, 'string'
+    end
+    return ascii or wide, 'string'
+  end
+  if vartype == vtByteArray or vartype == vtBinary then
+    local bytes = safe_read_bytes(address, default_bytesize_for_vartype(vartype, bytesize)) or {}
+    return bytes_to_hex(bytes), 'bytes_hex'
+  end
+
+  local bytes = safe_read_bytes(address, default_bytesize_for_vartype(vartype, bytesize)) or {}
+  return bytes_to_hex(bytes), 'bytes_hex'
+end
+
+local function read_structure_instance(structure, base_address, max_depth, include_raw, visited)
+  visited = visited or {}
+  local structure_index = find_structure_index(structure)
+  local visit_key = tostring(structure_index ~= nil and structure_index or tostring(structure.Name or '')) .. '@' .. tostring(base_address)
+
+  if visited[visit_key] then
+    return {
+      address = base_address,
+      address_hex = string.format('0x%X', base_address),
+      structure = serialize_structure(structure, false),
+      cycle_detected = true,
+      fields = {},
+    }
+  end
+
+  visited[visit_key] = true
+  local fields = {}
+  local element_count = tonumber(structure.Count) or 0
+
+  for element_index = 0, element_count - 1 do
+    local element = structure.Element[element_index]
+    local field = serialize_element(element)
+    local field_address = base_address + (field.offset or 0)
+    field.address = field_address
+    field.address_hex = string.format('0x%X', field_address)
+    field.vartype_name = VALUE_TYPE_NAMES[field.vartype] or 'unknown'
+    field.bytesize = default_bytesize_for_vartype(field.vartype, field.bytesize)
+
+    local child_struct = nil
+    pcall(function() child_struct = element.ChildStruct end)
+    local child_struct_start = tonumber(field.child_struct_start) or 0
+
+    if child_struct ~= nil and tonumber(max_depth) and tonumber(max_depth) > 0 then
+      if field.vartype == vtPointer then
+        local pointer_value = safe_call(readPointer, field_address)
+        field.value = pointer_value
+        field.value_kind = 'pointer'
+        if pointer_value ~= nil then
+          field.value_hex = string.format('0x%X', pointer_value)
+          field.child_address = pointer_value + child_struct_start
+          field.child_address_hex = string.format('0x%X', field.child_address)
+          field.child = read_structure_instance(child_struct, field.child_address, tonumber(max_depth) - 1, include_raw, visited)
+        end
+      else
+        field.child_address = field_address + child_struct_start
+        field.child_address_hex = string.format('0x%X', field.child_address)
+        field.child = read_structure_instance(child_struct, field.child_address, tonumber(max_depth) - 1, include_raw, visited)
+      end
+    else
+      local value, value_kind = read_scalar_value(field.vartype, field_address, field.bytesize)
+      field.value = value
+      field.value_kind = value_kind
+      if type(value) == 'number' and (field.vartype == vtPointer or field.vartype == vtQword) then
+        field.value_hex = string.format('0x%X', value)
+      end
+    end
+
+    if include_raw then
+      local raw_bytes = safe_read_bytes(field_address, math.min(field.bytesize, 64)) or {}
+      field.raw_bytes = raw_bytes
+      field.raw_bytes_hex = bytes_to_hex(raw_bytes)
+      field.raw_truncated = field.bytesize > #raw_bytes
+    end
+
+    fields[#fields + 1] = field
+  end
+
+  visited[visit_key] = nil
+  return {
+    address = base_address,
+    address_hex = string.format('0x%X', base_address),
+    structure = serialize_structure(structure, false),
+    fields = fields,
+  }
 end
 
 function M.list_structures(include_elements)
@@ -314,7 +513,29 @@ function M.fill_from_dotnet(name, index, address, change_name)
   end)
 end
 
-_G.__ce_mcp_modules["structure"] = "2026.03.08.1"
-return {ok = true, module = "structure", version = "2026.03.08.1"}
+function M.read_structure(name, index, address, max_depth, include_raw)
+  return run_on_main_thread(function()
+    local structure = resolve_structure(name, index)
+    if structure == nil then
+      error('structure_not_found')
+    end
+
+    local resolved_address = getAddressSafe(address)
+    if resolved_address == nil then
+      error('structure_instance_address_not_found')
+    end
+
+    return read_structure_instance(
+      structure,
+      resolved_address,
+      math.max(0, tonumber(max_depth) or 1),
+      include_raw ~= false,
+      {}
+    )
+  end)
+end
+
+_G.__ce_mcp_modules["structure"] = "2026.03.08.2"
+return {ok = true, module = "structure", version = "2026.03.08.2"}
 ''',
 )

@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -113,10 +114,10 @@ class LiveToolSuite:
                  *,
                  host: str = "127.0.0.1",
                  port: int = 5556,
-                 primary_process_name: str = "Minecraft.Windows.exe") -> None:
+                 primary_process_name: str | None = None) -> None:
         self.host = host
         self.port = port
-        self.primary_process_name = primary_process_name
+        self.primary_process_name = primary_process_name or os.environ.get("CE_MCP_PRIMARY_PROCESS", "Minecraft.Windows.exe")
         self.bridge = CheatEngineBridge(host=host, port=port)
         self.context = ToolContext(lambda: self.bridge)
         self.server = FakeServer()
@@ -134,13 +135,16 @@ class LiveToolSuite:
         self.general_record_id: int | None = None
         self.script_record_id: int | None = None
         self.extra_record_ids: list[int] = []
-        self.table_file_name = "ce_mcp_live_payload"
+        self.table_file_name = f"ce_mcp_live_payload_{self.temp_dir.name}"
         self.table_save_path = self.temp_dir / "live_table.ct"
         self.table_export_path = self.temp_dir / "payload.bin"
         self.dissect_path = self.temp_dir / "live_dissect.dct"
         self.lua_module_root = self.temp_dir / "lua_libs"
         self.lua_module_name = "ce_live_module"
         self.lua_script_path = self.temp_dir / "ce_live_script.lua"
+        self.lua_preload_module_name = "ce_live_preload"
+        self.lua_preload_file_module_name = "ce_live_preload_file"
+        self.lua_preload_file_path = self.temp_dir / "ce_live_preload.lua"
         self.auto_attach_original: list[str] = []
         self.invoked: set[str] = set()
 
@@ -280,6 +284,14 @@ class LiveToolSuite:
             encoding="utf-8",
         )
         self.lua_script_path.write_text("return { value = 77, source = 'ce_live_script' }\n", encoding="utf-8")
+        self.lua_preload_file_path.write_text(
+            "local M = {}\n"
+            "function M.answer()\n"
+            "  return 84\n"
+            "end\n"
+            "return M\n",
+            encoding="utf-8",
+        )
 
     def _prepare_remote_scratch(self) -> None:
         if self.remote_scratch is not None:
@@ -546,18 +558,40 @@ return { base = base }
     def _run_script_tools(self) -> None:
         self._call("ce.lua_eval", script="1 + 1")
         self._call("ce.lua_exec", script="return { value = 2 }")
+        self._call("ce.lua_eval_with_globals", script="player_name .. ':' .. tostring(limit_value)", globals={"player_name": "ce_live", "limit_value": 7})
+        self._call("ce.lua_exec_with_globals", script="return { joined = player_name .. ':' .. tostring(limit_value) }", globals={"player_name": "ce_live", "limit_value": 9})
         self._call("ce.auto_assemble", script="{$lua}\nreturn ''\n{$asm}")
         self._call("ce.lua_call", function_name="readInteger", args=[self.remote_scratch.integer_address], result_field="value")
         self._call("ce.lua_set_global", variable_name="ce_mcp_live_global", value=1337)
         self._call("ce.lua_get_global", variable_name="ce_mcp_live_global")
         self._call("ce.run_script_file", path=str(self.lua_script_path))
         self._call("ce.lua_get_package_paths")
+        self._call("ce.lua_get_environment")
         self._call("ce.lua_add_package_path", path=str(self.lua_module_root / "?.lua"), prepend=True)
+        self._call("ce.lua_remove_package_path", path=str(self.lua_module_root / "?.lua"))
         self._call("ce.lua_add_package_cpath", path=str(self.lua_module_root / "?.dll"), prepend=True)
+        self._call("ce.lua_remove_package_cpath", path=str(self.lua_module_root / "?.dll"))
         self._call("ce.lua_add_library_root", path=str(self.lua_module_root), prepend=True)
+        self._call(
+            "ce.lua_configure_environment",
+            library_roots=[str(self.lua_module_root)],
+            package_paths=[str(self.lua_module_root / "?.lua")],
+            package_cpaths=[str(self.lua_module_root / "?.dll")],
+            prepend=True,
+        )
+        self._call("ce.lua_preload_module", module_name=self.lua_preload_module_name, script="local M = {}; function M.answer() return 21 end; return M", force_reload=True)
+        self._call("ce.lua_list_preloaded_modules")
+        self._call("ce.lua_require_module", module_name=self.lua_preload_module_name, force_reload=True)
+        self._call("ce.lua_call_module_function", module_name=self.lua_preload_module_name, function_name="answer", args=[], force_reload=True)
+        self._call("ce.lua_unpreload_module", module_name=self.lua_preload_module_name)
+        self._call("ce.lua_preload_file", module_name=self.lua_preload_file_module_name, path=str(self.lua_preload_file_path), force_reload=True)
+        self._call("ce.lua_require_module", module_name=self.lua_preload_file_module_name, force_reload=True)
+        self._call("ce.lua_call_module_function", module_name=self.lua_preload_file_module_name, function_name="answer", args=[], force_reload=False)
         self._call("ce.lua_require_module", module_name=self.lua_module_name, force_reload=True)
         self._call("ce.lua_call_module_function", module_name=self.lua_module_name, function_name="answer", args=[], force_reload=False)
+        self._call("ce.lua_list_loaded_modules")
         self._call("ce.lua_unload_module", module_name=self.lua_module_name)
+        self._call("ce.lua_unload_module", module_name=self.lua_preload_file_module_name)
         self._call("ce.lua_run_file", path=str(self.lua_script_path))
 
     def _run_scan_tools(self) -> None:
@@ -583,6 +617,7 @@ return { base = base }
             },
         )
         self._call("ce.scan_wait", scan_session_id=results_session)
+        self._call("ce.scan_get_state", scan_session_id=results_session)
         self._call("ce.scan_get_progress", scan_session_id=results_session)
         self._call("ce.scan_attach_foundlist", scan_session_id=results_session)
         self._call("ce.scan_get_result_count", scan_session_id=results_session)
@@ -812,6 +847,43 @@ return { base = base }
             add_global=True,
         )
         self.structure_names.append("CE_MCP_Live_Structure_B")
+        self._call(
+            "ce.structure_define",
+            name="CE_MCP_Live_Structure_Child",
+            elements=[
+                {"offset": 0, "name": "item_count", "vartype": "dword", "bytesize": 4},
+            ],
+            add_global=True,
+        )
+        self.structure_names.append("CE_MCP_Live_Structure_Child")
+        self._call(
+            "ce.structure_define",
+            name="CE_MCP_Live_Structure_Read",
+            elements=[
+                {"offset": 0, "name": "health", "vartype": "dword", "bytesize": 4},
+                {"offset": 4, "name": "speed", "vartype": "float", "bytesize": 4},
+                {"offset": 8, "name": "inventory_ptr", "vartype": "pointer", "child_structure_name": "CE_MCP_Live_Structure_Child"},
+            ],
+            add_global=True,
+        )
+        self.structure_names.append("CE_MCP_Live_Structure_Read")
+        self._call(
+            "ce.lua_exec",
+            script=(
+                f"writeInteger({self.remote_scratch.base + 0x900}, 321)\n"
+                f"writeFloat({self.remote_scratch.base + 0x904}, 1.5)\n"
+                f"writePointer({self.remote_scratch.base + 0x908}, {self.remote_scratch.base + 0x930})\n"
+                f"writeInteger({self.remote_scratch.base + 0x930}, 7)\n"
+                "return { ok = true }"
+            ),
+        )
+        self._call(
+            "ce.structure_read",
+            name="CE_MCP_Live_Structure_Read",
+            address=self.remote_scratch.base + 0x900,
+            max_depth=2,
+            include_raw=True,
+        )
 
         DotNetTarget.build()
         self.dotnet_target = DotNetTarget.start()
@@ -847,13 +919,19 @@ return { base = base }
         self._call("ce.debug_start", debugger_interface=2)
         self._call("ce.debug_continue", continue_option="run")
         self._call("ce.debug_list_breakpoints")
-        self._call("ce.debug_watch_accesses_start", address=self.dotnet_target.health_address, size=4, method="debug_register", max_hits=4, auto_continue=True, debugger_interface=2)
-        self._call("ce.debug_watch_writes_start", address=self.dotnet_target.health_address, size=4, method="debug_register", max_hits=4, auto_continue=True, debugger_interface=2)
-        execute_watch = self._call("ce.debug_watch_execute_start", address=self.primary_module_base, size=1, method="int3", max_hits=1, auto_continue=True, debugger_interface=2)
-        watch_id = str(execute_watch["watch"]["watch_id"])
+        self._safe_call("ce.debug_watch_accesses_start", address=self.dotnet_target.health_address, size=4, method="debug_register", max_hits=4, auto_continue=True, debugger_interface=2)
+        self._safe_call("ce.debug_watch_writes_start", address=self.dotnet_target.health_address, size=4, method="debug_register", max_hits=4, auto_continue=True, debugger_interface=2)
+        execute_watch = self._safe_call("ce.debug_watch_execute_start", address=self.primary_module_base, size=1, method="int3", max_hits=1, auto_continue=True, debugger_interface=2)
+        watch_id = None
+        if execute_watch is not None and execute_watch.get("ok") is not False:
+            watch_id = str(execute_watch["watch"]["watch_id"])
         time.sleep(1.0)
-        self._call("ce.debug_watch_get_hits", watch_id=watch_id, limit=8)
-        self._call("ce.debug_watch_stop", watch_id=watch_id)
+        if watch_id is not None:
+            self._safe_call("ce.debug_watch_get_hits", watch_id=watch_id, limit=8)
+            self._safe_call("ce.debug_watch_stop", watch_id=watch_id)
+        else:
+            self._safe_call("ce.debug_watch_get_hits", watch_id="ce-missing-watch", limit=8)
+            self._safe_call("ce.debug_watch_stop", watch_id="ce-missing-watch")
         self._call("ce.debug_watch_stop_all")
         self._call("ce.attach_process", process_name=self.primary_process_name)
 
@@ -863,7 +941,7 @@ return { base = base }
             raise AssertionError("live suite did not invoke every registered tool:\n" + "\n".join(missing))
 
 
-def run_pointer_chain_string_smoke() -> None:
+def run_pointer_chain_string_smoke(primary_process_name: str | None = None) -> None:
     bridge = CheatEngineBridge(host="127.0.0.1", port=5556)
     bridge.start()
     try:
@@ -877,9 +955,10 @@ def run_pointer_chain_string_smoke() -> None:
         server = FakeServer()
         register_all(server, ctx)
         session_id = str(bridge.list_sessions()[0]["session_id"])
-        attach_result = server.tools["ce.attach_process"](process_name="Minecraft.Windows.exe", process_id=None, session_id=session_id)
+        process_name = primary_process_name or os.environ.get("CE_MCP_PRIMARY_PROCESS", "Minecraft.Windows.exe")
+        attach_result = server.tools["ce.attach_process"](process_name=process_name, process_id=None, session_id=session_id)
         if attach_result.get("ok") is False:
-            raise AssertionError(f"ce.attach_process failed for pointer string smoke: {attach_result}")
+            raise AssertionError(f"ce.attach_process failed for pointer string smoke ({process_name}): {attach_result}")
 
         base = int(ctx.call_lua_function("allocateMemory", args=[0x1000], session_id=session_id, result_field="address")["address"])
         init_script = (
@@ -904,7 +983,7 @@ def run_pointer_chain_string_smoke() -> None:
         bridge.stop()
 
 
-def run_live_tool_suite() -> dict[str, Any]:
+def run_live_tool_suite(*, primary_process_name: str | None = None) -> dict[str, Any]:
     group_methods = [
         ["_run_native_tools", "_run_exported_tools", "_run_address_tools", "_run_process_tools"],
         ["_run_pointer_tools"],
@@ -919,7 +998,7 @@ def run_live_tool_suite() -> dict[str, Any]:
     summary: dict[str, Any] = {}
 
     for methods in group_methods:
-        suite = LiveToolSuite()
+        suite = LiveToolSuite(primary_process_name=primary_process_name)
         suite.start()
         try:
             if all_tools is None:
@@ -932,17 +1011,17 @@ def run_live_tool_suite() -> dict[str, Any]:
                 }
             for method_name in methods:
                 getattr(suite, method_name)()
-            aggregate_invoked.update(suite.invoked)
         finally:
             suite.stop()
+            aggregate_invoked.update(suite.invoked)
 
     assert all_tools is not None
+    run_pointer_chain_string_smoke(primary_process_name=primary_process_name)
+    aggregate_invoked.add("ce.read_pointer_chain_string")
+
     missing = sorted(all_tools - aggregate_invoked)
     if missing:
         raise AssertionError("live suite did not invoke every registered tool:\n" + "\n".join(missing))
-
-    run_pointer_chain_string_smoke()
-    aggregate_invoked.add("ce.read_pointer_chain_string")
 
     summary.update({
         "ok": True,

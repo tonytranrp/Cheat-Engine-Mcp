@@ -261,12 +261,46 @@ class FakeToolContext:
         if runtime_name == "lua":
             if function_name == "get_package_paths":
                 return {"ok": True, "path": "./?.lua", "cpath": "./?.dll", "path_entries": ["./?.lua"], "cpath_entries": ["./?.dll"]}
-            if function_name in {"add_package_path", "add_package_cpath", "add_library_root"}:
+            if function_name == "get_environment":
+                return {
+                    "ok": True,
+                    "lua_version": "Lua 5.x",
+                    "path": "./?.lua",
+                    "cpath": "./?.dll",
+                    "path_entries": ["./?.lua"],
+                    "cpath_entries": ["./?.dll"],
+                    "loaded_modules": ["sample_module"],
+                    "preloaded_modules": ["sample_preload"],
+                    "searcher_count": 4,
+                }
+            if function_name in {"add_package_path", "add_package_cpath", "add_library_root", "remove_package_path", "remove_package_cpath"}:
                 return {"ok": True, "changed": True, "path": "./?.lua", "cpath": "./?.dll", "path_entries": ["./?.lua"], "cpath_entries": ["./?.dll"]}
+            if function_name == "configure_environment":
+                return {
+                    "ok": True,
+                    "lua_version": "Lua 5.x",
+                    "path": "./?.lua",
+                    "cpath": "./?.dll",
+                    "path_entries": ["./?.lua"],
+                    "cpath_entries": ["./?.dll"],
+                    "loaded_modules": ["sample_module"],
+                    "preloaded_modules": ["sample_preload"],
+                    "searcher_count": 4,
+                    "configured_library_roots": ["C:/tmp"],
+                    "prepend": True,
+                }
             if function_name == "require_module":
                 return {"ok": True, "module_name": "sample_module", "loaded": True, "value_type": "table", "value": {"answer": 42}}
             if function_name == "unload_module":
                 return {"ok": True, "module_name": "sample_module", "loaded": False}
+            if function_name == "list_loaded_modules":
+                return {"ok": True, "count": 1, "modules": ["sample_module"]}
+            if function_name == "list_preloaded_modules":
+                return {"ok": True, "count": 1, "modules": ["sample_preload"]}
+            if function_name in {"preload_module_source", "preload_module_file"}:
+                return {"ok": True, "module_name": "sample_preload", "preloaded": True, "force_reload": False}
+            if function_name == "unpreload_module":
+                return {"ok": True, "module_name": "sample_preload", "preloaded": False}
             if function_name == "call_module_function":
                 return {"ok": True, "module_name": "sample_module", "function_name": "answer", "value": 42}
             if function_name == "run_file":
@@ -279,6 +313,14 @@ class FakeToolContext:
                 return {"ok": True, "structure": {"index": 0, "name": "Player", "size": 16, "count": 1, "global": True, "elements": []}}
             if function_name in {"create_structure", "define_structure", "auto_guess", "fill_from_dotnet"}:
                 return {"ok": True, "structure": {"index": 0, "name": "Player", "size": 16, "count": 1, "global": True, "elements": []}}
+            if function_name == "read_structure":
+                return {
+                    "ok": True,
+                    "address": 0x140000000,
+                    "address_hex": "0x140000000",
+                    "structure": {"index": 0, "name": "Player", "size": 16, "count": 1, "global": True},
+                    "fields": [{"name": "health", "offset": 0, "address": 0x140000000, "value": 100, "value_kind": "integer"}],
+                }
             if function_name == "add_element":
                 return {
                     "ok": True,
@@ -410,6 +452,7 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
         "continue_option": "run",
         "method": "debug_register",
         "auto_continue": True,
+        "globals": {"player_name": "inventory", "limit_value": 7},
         "options": {
             "description": "health",
             "address": "game.exe+0",
@@ -423,6 +466,9 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
             {"description": "health", "address": "game.exe+0", "type": "dword", "value": 100},
             {"description": "armor", "address": "game.exe+4", "type": "4 Bytes", "value": 50},
         ],
+        "library_roots": [str(temp_dir)],
+        "package_paths": [str(temp_dir / "?.lua")],
+        "package_cpaths": [str(temp_dir / "?.dll")],
     }
 
     if tool_name == "ce.run_script_file":
@@ -431,8 +477,17 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
         overrides["path"] = str(script_path)
     if tool_name == "ce.lua_add_library_root":
         overrides["path"] = str(temp_dir)
+    if tool_name == "ce.lua_configure_environment":
+        overrides["library_roots"] = [str(temp_dir)]
+        overrides["package_paths"] = [str(temp_dir / "?.lua")]
+        overrides["package_cpaths"] = [str(temp_dir / "?.dll")]
+        overrides["prepend"] = True
+    if tool_name in {"ce.lua_preload_file", "ce.run_script_file", "ce.lua_run_file"}:
+        overrides["path"] = str(script_path)
     if tool_name in {"ce.lua_require_module", "ce.lua_unload_module", "ce.lua_call_module_function"}:
         overrides["module_name"] = "sample_module"
+    if tool_name in {"ce.lua_preload_module", "ce.lua_unpreload_module", "ce.lua_preload_file"}:
+        overrides["module_name"] = "sample_preload"
     if tool_name == "ce.lua_call_module_function":
         overrides["function_name"] = "answer"
         overrides["args"] = []
@@ -440,6 +495,11 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
         overrides["options"] = {"offset": 0, "name": "health", "vartype": "dword", "bytesize": 4}
     if tool_name == "ce.structure_define":
         overrides["elements"] = [{"offset": 0, "name": "health", "vartype": "dword", "bytesize": 4}]
+    if tool_name == "ce.structure_read":
+        overrides["name"] = "Player"
+        overrides["address"] = "game.exe+0"
+        overrides["max_depth"] = 1
+        overrides["include_raw"] = True
     if tool_name == "ce.record_create":
         overrides["options"] = {"description": "health", "address": "game.exe+0", "type": "dword", "value": 100}
     if tool_name == "ce.record_create_group":

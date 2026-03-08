@@ -17,42 +17,46 @@ It gives Codex a live Cheat Engine backend for process attach, memory access, po
   - `ce.auto_assemble`
   - `ce.lua_call`
 - Broad MCP surface
-  - 190+ MCP tools currently registered
+  - 200+ MCP tools currently registered
   - process, modules, symbols, memory, scans, pointer chains, tables, records, exported SDK fields
 - Raw SDK visibility
   - full copied `ExportedFunctions` block exposed through MCP metadata tools
 
-## What Changed In 0.2.4
+## What Changed In 0.2.5
 
-This release closes the live usage gaps found during real CE/IDA analysis work.
+This release extends the real CE workflow beyond attach/memory fixes and into structure dumping, richer Lua library workflows, and lower per-call overhead inside the Python backend.
 
 ### New API surface
 
-- New address/target helpers:
-  - `ce.normalize_address`
-  - `ce.verify_target`
-- New bulk record helpers:
-  - `ce.record_create_many`
-  - `ce.record_create_group`
+- New structure-instance dump helper:
+  - `ce.structure_read`
+- New Lua environment and preload helpers:
+  - `ce.lua_get_environment`
+  - `ce.lua_configure_environment`
+  - `ce.lua_remove_package_path`
+  - `ce.lua_remove_package_cpath`
+  - `ce.lua_list_loaded_modules`
+  - `ce.lua_list_preloaded_modules`
+  - `ce.lua_preload_module`
+  - `ce.lua_preload_file`
+  - `ce.lua_unpreload_module`
+- New globals-scoped Lua execution helpers:
+  - `ce.lua_eval_with_globals`
+  - `ce.lua_exec_with_globals`
 
 ### Fixes and behavior changes
 
-- Native raw-memory tools now accept CE expressions and registered symbols anywhere the Python surface already documented `int | str`
-  - `ce.query_memory`
-  - `ce.query_memory_map`
-  - `ce.aob_scan`
-  - `ce.read_memory`
-  - `ce.write_memory`
-- `ce.resolve_symbol(address=...)` now also accepts CE address expressions instead of only raw integers
-- Cheat-table record type normalization now accepts common CE UI labels such as `4 Bytes`, `8 Bytes`, `Byte Array`, and `Auto Assembler`
-- Record/runtime failures now return cleaner `invalid_record_type:*` and `record_not_found:*` messages instead of leaking raw Lua traceback noise
-- README and troubleshooting guidance now clarify that `ce.list_tools` reports only the native bridge subset, not the full Python-registered MCP surface
+- The existing `ce.structure_*` and `ce.dissect_*` surface is now complemented by a direct instance reader so an address can be dumped as named fields after `ce.structure_define`, `ce.structure_auto_guess`, or `ce.structure_fill_from_dotnet`
+- The Lua runtime now supports batch environment configuration, source/file preloads, and explicit package-path removal in addition to the earlier single-entry add helpers
+- `ce.lua_eval_with_globals` and `ce.lua_exec_with_globals` let callers inject temporary globals without permanently mutating `_G`
+- The Python backend now loads a lightweight CE-side dispatcher once per session and routes repeated runtime/global Lua calls through it, reducing repeated script boilerplate and improving steady-state latency
 
 ### Tooling and test improvements
 
-- Live integration coverage now exercises symbolic-address paths for native memory tools
-- Live integration coverage now exercises `ce.normalize_address`, `ce.verify_target`, `ce.record_create_many`, and `ce.record_create_group`
-- The table runtime version was bumped so updated helpers reload cleanly in existing CE sessions
+- Unit coverage now exercises `ce.structure_read` and globals-scoped Lua execution helpers
+- Live integration coverage now exercises the new structure dump path plus the expanded Lua package/preload workflow
+- The dev live suite can now target a custom primary process through `tools/dev/run-live-tool-suite.py --process-name ...` or `CE_MCP_PRIMARY_PROCESS`
+- Runtime module versions were bumped so updated helpers reload cleanly in existing CE sessions
 
 ### Repository layout
 
@@ -133,7 +137,7 @@ Codex
 
 ## Tool Surface
 
-Current registered MCP tool count: `196`
+Current registered MCP tool count: `208`
 
 ### Native bridge and session tools
 
@@ -161,6 +165,8 @@ Current registered MCP tool count: `196`
 
 - `ce.lua_eval`
 - `ce.lua_exec`
+- `ce.lua_eval_with_globals`
+- `ce.lua_exec_with_globals`
 - `ce.auto_assemble`
 - `ce.lua_call`
 - `ce.lua_get_global`
@@ -170,11 +176,20 @@ Current registered MCP tool count: `196`
 ### Lua package and module tools
 
 - `ce.lua_get_package_paths`
+- `ce.lua_get_environment`
 - `ce.lua_add_package_path`
+- `ce.lua_remove_package_path`
 - `ce.lua_add_package_cpath`
+- `ce.lua_remove_package_cpath`
 - `ce.lua_add_library_root`
+- `ce.lua_configure_environment`
 - `ce.lua_require_module`
 - `ce.lua_unload_module`
+- `ce.lua_list_loaded_modules`
+- `ce.lua_list_preloaded_modules`
+- `ce.lua_preload_module`
+- `ce.lua_preload_file`
+- `ce.lua_unpreload_module`
 - `ce.lua_call_module_function`
 - `ce.lua_run_file`
 
@@ -358,13 +373,18 @@ This is used for:
 - `ce.structure_create`
 - `ce.structure_define`
 - `ce.structure_add_element`
+- `ce.structure_auto_guess`
 - `ce.structure_fill_from_dotnet`
+- `ce.structure_read`
 - `ce.structure_delete`
+- `ce.dissect_clear`
 - `ce.dissect_module`
-- `ce.dissect_address`
+- `ce.dissect_region`
 - `ce.dissect_get_references`
 - `ce.dissect_get_referenced_strings`
 - `ce.dissect_get_referenced_functions`
+- `ce.dissect_save`
+- `ce.dissect_load`
 
 ### Debug and watch tools
 
@@ -409,6 +429,23 @@ Run Lua directly inside Cheat Engine:
 
 ```text
 ce.lua_exec(script="return {pid=getOpenedProcessID(), target=process, is64=targetIs64Bit()}")
+```
+
+Run Lua with temporary globals instead of mutating `_G` yourself:
+
+```text
+ce.lua_eval_with_globals(script="player_name .. ':' .. tostring(limit_value)", globals={"player_name": "Alex", "limit_value": 7})
+```
+
+Batch-configure external Lua roots and DLL search paths:
+
+```text
+ce.lua_configure_environment(
+  library_roots=["C:/ce-libs"],
+  package_paths=["C:/ce-libs/custom/?.lua"],
+  package_cpaths=["C:/ce-libs/bin/?.dll"],
+  prepend=True
+)
 ```
 
 Create a scan session and inspect CE scan enums:
@@ -468,6 +505,12 @@ ce.record_create_group(
     {"description": "inventory_ptr", "address": "game.exe+123460", "type": "pointer"}
   ]
 )
+```
+
+Read a defined structure instance at a live address:
+
+```text
+ce.structure_read(name="Player", address="game.exe+123456", max_depth=2, include_raw=True)
 ```
 
 ## One-Time Local Installation
@@ -583,4 +626,5 @@ Short version:
 - The raw exported-function catalog currently reports all copied fields, including undocumented `PVOID` entries.
 - Typed, safe wrappers are exposed as dedicated MCP tools. Raw pointer-only fields are exposed for inspection, not generic invocation.
 - `ce.list_tools` reports only the native bridge tools advertised by the plugin. Use the README tool-surface section or the Python registry for the full MCP list.
+- Runtime-backed structure and Lua helpers are cached per session and reload automatically when the bridge session changes.
 - `ce.scan_new` exists but is not part of the recommended quick-start flow yet.

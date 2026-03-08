@@ -113,6 +113,22 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
         ),
         runtime_tool(
             ctx,
+            name="ce.structure_read",
+            description="Read a memory address as an instance of a Cheat Engine structure definition.",
+            runtime=STRUCTURE_RUNTIME,
+            function_name="read_structure",
+            parameters=(
+                ParameterSpec("address", int | str),
+                ParameterSpec("name", str | None, None),
+                ParameterSpec("index", int | None, None),
+                ParameterSpec("max_depth", int, 1),
+                ParameterSpec("include_raw", bool, True),
+            ),
+            arg_builder=lambda address, name=None, index=None, max_depth=1, include_raw=True: [name, index, address, max_depth, include_raw],
+            timeout_seconds=120.0,
+        ),
+        runtime_tool(
+            ctx,
             name="ce.dissect_clear",
             description="Clear the current Cheat Engine DissectCode analysis state.",
             runtime=DISSECT_RUNTIME,

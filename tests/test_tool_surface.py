@@ -35,10 +35,17 @@ class ToolSurfaceTests(unittest.TestCase):
             "ce.scan_string",
             "ce.scan_value",
             "ce.scan_once",
+            "ce.lua_get_environment",
+            "ce.lua_configure_environment",
+            "ce.lua_preload_module",
+            "ce.lua_preload_file",
+            "ce.lua_eval_with_globals",
+            "ce.lua_exec_with_globals",
             "ce.structure_list",
             "ce.structure_get",
             "ce.structure_create",
             "ce.structure_define",
+            "ce.structure_read",
             "ce.record_create_many",
             "ce.record_create_group",
             "ce.dissect_module",
@@ -76,6 +83,15 @@ class ToolSurfaceTests(unittest.TestCase):
         self.assertTrue(result["attached"])
         self.assertEqual(result["process_name"], "game.exe")
         self.assertEqual(result["main_module"]["module_name"], "game.exe")
+
+    def test_structure_read_returns_named_fields(self) -> None:
+        result = self.server.tools["ce.structure_read"](name="Player", index=None, address="game.exe+0", max_depth=1, include_raw=True, session_id="ce-test")
+        self.assertEqual(result["structure"]["name"], "Player")
+        self.assertEqual(result["fields"][0]["name"], "health")
+
+    def test_lua_eval_with_globals_wraps_temp_globals(self) -> None:
+        result = self.server.tools["ce.lua_eval_with_globals"](script="player_name", globals={"player_name": "Alex"}, session_id="ce-test")
+        self.assertIn("player_name", result["value"])
 
 
 if __name__ == "__main__":

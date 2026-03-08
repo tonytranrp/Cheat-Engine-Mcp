@@ -1,6 +1,7 @@
 ﻿#!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -18,7 +19,15 @@ from live_support import run_live_tool_suite
 
 
 def main() -> int:
-    summary = run_live_tool_suite()
+    parser = argparse.ArgumentParser(description="Run the live Cheat Engine MCP tool suite.")
+    parser.add_argument(
+        "--process-name",
+        default=None,
+        help="Primary target process name for live attach checks. Defaults to CE_MCP_PRIMARY_PROCESS or Minecraft.Windows.exe.",
+    )
+    args = parser.parse_args()
+
+    summary = run_live_tool_suite(primary_process_name=args.process_name)
     print(json.dumps(summary, indent=2))
     return 0
 

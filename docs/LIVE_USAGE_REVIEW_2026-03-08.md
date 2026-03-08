@@ -1,6 +1,6 @@
 # Live Usage Review 2026-03-08
 
-This document records the real issues found during live use against `Tic-tak-toe.exe`, and the changes shipped in `0.2.4` to close them.
+This document records the real issues found during live use against `Tic-tak-toe.exe`, and the changes shipped in `0.2.4` and `0.2.5` to close them.
 
 ## Fixed In 0.2.4
 
@@ -66,3 +66,70 @@ Validated in the repo after the fix pass:
 ## Follow-Up
 
 This review started as an issue list. It is now a shipped-fix record for the `0.2.4` release.
+
+## Fixed In 0.2.5
+
+### 1. Structure analysis now has a direct live-instance dump path
+
+New tool:
+
+- `ce.structure_read`
+
+This closes the gap between defining a structure and actually dumping a live object as named fields. The new path supports:
+
+- scalar field reads by CE vartype
+- raw-byte snapshots for each element
+- nested child structures
+- pointer-to-structure dereference and recursion
+
+This is the missing piece for workflows like:
+
+- define a `Field` layout for `Tic-tak-toe.exe`
+- point the tool at `Tic-tak-toe.exe+1202E0`
+- dump the live object in a single MCP call
+
+### 2. Lua library workflows now support real environment management
+
+New tools:
+
+- `ce.lua_get_environment`
+- `ce.lua_configure_environment`
+- `ce.lua_remove_package_path`
+- `ce.lua_remove_package_cpath`
+- `ce.lua_list_loaded_modules`
+- `ce.lua_list_preloaded_modules`
+- `ce.lua_preload_module`
+- `ce.lua_preload_file`
+- `ce.lua_unpreload_module`
+- `ce.lua_eval_with_globals`
+- `ce.lua_exec_with_globals`
+
+These were added to support practical CE scripting instead of single-string `lua_eval` calls only. The new runtime now handles:
+
+- external Lua search path setup
+- explicit cleanup of stale package entries
+- preloading source or file-backed modules without relying on search paths
+- temporary globals injection without permanently mutating `_G`
+
+### 3. Repeated runtime calls now pay less per-call overhead
+
+The Python backend previously rebuilt larger wrapper scripts for many runtime-backed Lua calls. `0.2.5` now loads a CE-side dispatcher once per session and reuses compact call sites for:
+
+- runtime module dispatch
+- direct global Lua calls
+
+This reduces repeated boilerplate, lowers steady-state latency, and keeps the runtime/module cache behavior more predictable across live sessions.
+
+## Verification
+
+Validated in the repo after the `0.2.5` pass:
+
+- Python registry count increased from `196` to `208`
+- README, release metadata, and troubleshooting docs updated to `0.2.5`
+- Unit coverage extended for structure-instance dumping and globals-scoped Lua execution
+- Live integration coverage extended for structure reads plus Lua environment/preload workflows
+- The dev live suite now accepts a target-process override and was hardened for repeated runs and debugger-capability differences
+
+## Status
+
+This review is now the shipped-fix record for the `0.2.4` and `0.2.5` releases.

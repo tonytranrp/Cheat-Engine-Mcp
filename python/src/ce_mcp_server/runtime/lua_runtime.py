@@ -4,7 +4,7 @@ from ..context import RuntimeModule
 
 LUA_RUNTIME = RuntimeModule(
     name="lua",
-    version="2026.03.08.1",
+    version="2026.03.08.2",
     script=r'''
 _G.__ce_mcp = _G.__ce_mcp or {}
 _G.__ce_mcp_modules = _G.__ce_mcp_modules or {}
@@ -66,6 +66,61 @@ local function add_entry(current_value, entry, prepend)
   }
 end
 
+local function remove_entry(current_value, entry)
+  local normalized = normalize_path(entry)
+  local entries = split_paths(current_value)
+  local kept = {}
+  local changed = false
+  for _, current in ipairs(entries) do
+    if current == normalized then
+      changed = true
+    else
+      kept[#kept + 1] = current
+    end
+  end
+
+  return {
+    changed = changed,
+    entries = kept,
+    value = table.concat(kept, ';'),
+    entry = normalized,
+  }
+end
+
+local function sorted_keys(map)
+  local keys = {}
+  for key in pairs(map or {}) do
+    keys[#keys + 1] = tostring(key)
+  end
+  table.sort(keys)
+  return keys
+end
+
+local function get_searcher_count()
+  local searchers = package.searchers or package.loaders or {}
+  return #searchers
+end
+
+local function compile_source(script, chunk_name)
+  if loadstring ~= nil then
+    return loadstring(tostring(script or ''), chunk_name)
+  end
+  return load(tostring(script or ''), chunk_name, 't')
+end
+
+local function package_snapshot()
+  return {
+    lua_version = tostring(_VERSION or ''),
+    path = package.path or '',
+    cpath = package.cpath or '',
+    path_entries = split_paths(package.path),
+    cpath_entries = split_paths(package.cpath),
+    loaded_modules = sorted_keys(package.loaded),
+    preloaded_modules = sorted_keys(package.preload),
+    searcher_count = get_searcher_count(),
+  }
+end
+
 function M.get_package_paths()
   return {
     path = package.path or '',
@@ -75,12 +130,27 @@ function M.get_package_paths()
   }
 end
 
+function M.get_environment()
+  return package_snapshot()
+end
+
 function M.add_package_path(path, prepend)
   local result = add_entry(package.path or '', path, prepend and true or false)
   package.path = result.value
   return {
     changed = result.changed,
     added_path = result.entry,
+    path = package.path,
+    path_entries = result.entries,
+  }
+end
+
+function M.remove_package_path(path)
+  local result = remove_entry(package.path or '', path)
+  package.path = result.value
+  return {
+    changed = result.changed,
+    removed_path = result.entry,
     path = package.path,
     path_entries = result.entries,
   }
@@ -97,12 +167,42 @@ function M.add_package_cpath(path, prepend)
   }
 end
 
+function M.remove_package_cpath(path)
+  local result = remove_entry(package.cpath or '', path)
+  package.cpath = result.value
+  return {
+    changed = result.changed,
+    removed_path = result.entry,
+    cpath = package.cpath,
+    cpath_entries = result.entries,
+  }
+end
+
 function M.add_library_root(root_path, prepend)
-  local root = normalize_path(root_path)
-  M.add_package_path(root .. '/?.lua', prepend)
-  M.add_package_path(root .. '/?/init.lua', prepend)
-  M.add_package_cpath(root .. '/?.dll', prepend)
+  local root_path_normalized = normalize_path(root_path)
+  M.add_package_path(root_path_normalized .. '/?.lua', prepend)
+  M.add_package_path(root_path_normalized .. '/?/init.lua', prepend)
+  M.add_package_cpath(root_path_normalized .. '/?.dll', prepend)
   return M.get_package_paths()
+end
+
+function M.configure_environment(library_roots, package_paths, package_cpaths, prepend)
+  local normalized_roots = {}
+  for _, root_path in ipairs(library_roots or {}) do
+    normalized_roots[#normalized_roots + 1] = normalize_path(root_path)
+    M.add_library_root(root_path, prepend)
+  end
+  for _, path in ipairs(package_paths or {}) do
+    M.add_package_path(path, prepend)
+  end
+  for _, path in ipairs(package_cpaths or {}) do
+    M.add_package_cpath(path, prepend)
+  end
+
+  local snapshot = package_snapshot()
+  snapshot.configured_library_roots = normalized_roots
+  snapshot.prepend = prepend and true or false
+  return snapshot
 end
 
 function M.run_file(path)
@@ -148,6 +248,87 @@ function M.unload_module(module_name)
   }
 end
 
+function M.list_loaded_modules()
+  local modules = sorted_keys(package.loaded)
+  return {
+    count = #modules,
+    modules = modules,
+  }
+end
+
+function M.list_preloaded_modules()
+  local modules = sorted_keys(package.preload)
+  return {
+    count = #modules,
+    modules = modules,
+  }
+end
+
+function M.preload_module_source(module_name, script, force_reload)
+  local normalized = tostring(module_name or '')
+  if normalized == '' then
+    error('lua_module_name_required')
+  end
+
+  local loader, err = compile_source(script, '@ce_mcp_preload:' .. normalized)
+  if loader == nil then
+    error('lua_preload_compile_failed:' .. tostring(err))
+  end
+
+  package.preload[normalized] = function(...)
+    return loader(...)
+  end
+  if force_reload then
+    package.loaded[normalized] = nil
+  end
+
+  return {
+    module_name = normalized,
+    preloaded = package.preload[normalized] ~= nil,
+    force_reload = force_reload and true or false,
+  }
+end
+
+function M.preload_module_file(module_name, path, force_reload)
+  local normalized = tostring(module_name or '')
+  if normalized == '' then
+    error('lua_module_name_required')
+  end
+
+  local normalized_path = normalize_path(path)
+  local loader, err = loadfile(normalized_path, 't')
+  if loader == nil then
+    error('lua_loadfile_failed:' .. tostring(err))
+  end
+
+  package.preload[normalized] = function(...)
+    return loader(...)
+  end
+  if force_reload then
+    package.loaded[normalized] = nil
+  end
+
+  return {
+    module_name = normalized,
+    path = normalized_path,
+    preloaded = package.preload[normalized] ~= nil,
+    force_reload = force_reload and true or false,
+  }
+end
+
+function M.unpreload_module(module_name)
+  local normalized = tostring(module_name or '')
+  if normalized == '' then
+    error('lua_module_name_required')
+  end
+
+  package.preload[normalized] = nil
+  return {
+    module_name = normalized,
+    preloaded = false,
+  }
+end
+
 function M.call_module_function(module_name, function_name, args, force_reload)
   local module_result = M.require_module(module_name, force_reload)
   if type(module_result.value) ~= 'table' then
@@ -168,7 +349,7 @@ function M.call_module_function(module_name, function_name, args, force_reload)
   }
 end
 
-_G.__ce_mcp_modules["lua"] = "2026.03.08.1"
-return {ok = true, module = "lua", version = "2026.03.08.1"}
+_G.__ce_mcp_modules["lua"] = "2026.03.08.2"
+return {ok = true, module = "lua", version = "2026.03.08.2"}
 ''',
 )
