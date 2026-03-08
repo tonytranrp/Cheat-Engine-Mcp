@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import shutil
+import struct
 import statistics
 import subprocess
 import tempfile
@@ -280,6 +281,43 @@ class LiveToolSuite:
         system_address = self._call("ce.get_address_safe", expression="kernel32.GetTickCount64")
         self.system_function_address = int(system_address["address"])
 
+    def _read_memory_bytes(self, address: int, size: int) -> bytes:
+        result = self._call("ce.read_memory", address=address, size=size)
+        return bytes.fromhex(str(result["bytes_hex"]))
+
+    def _find_pe_section(self, module_base: int, section_name: str) -> tuple[int, int]:
+        headers = self._read_memory_bytes(module_base, 0x4000)
+        if len(headers) < 0x100:
+            raise RuntimeError("module header read was too small")
+
+        e_lfanew = struct.unpack_from("<I", headers, 0x3C)[0]
+        if e_lfanew + 24 > len(headers):
+            raise RuntimeError("module NT headers are out of range")
+        if headers[e_lfanew:e_lfanew + 4] != b"PE\x00\x00":
+            raise RuntimeError("module is missing a valid PE signature")
+
+        file_header_offset = e_lfanew + 4
+        number_of_sections = struct.unpack_from("<H", headers, file_header_offset + 2)[0]
+        size_of_optional_header = struct.unpack_from("<H", headers, file_header_offset + 16)[0]
+        section_table_offset = file_header_offset + 20 + size_of_optional_header
+
+        for index in range(number_of_sections):
+            entry_offset = section_table_offset + index * 40
+            if entry_offset + 40 > len(headers):
+                raise RuntimeError("module section table is truncated")
+
+            raw_name = headers[entry_offset:entry_offset + 8].split(b"\x00", 1)[0].decode("ascii", errors="ignore")
+            if raw_name != section_name:
+                continue
+
+            virtual_size = struct.unpack_from("<I", headers, entry_offset + 8)[0]
+            virtual_address = struct.unpack_from("<I", headers, entry_offset + 12)[0]
+            if virtual_size == 0:
+                virtual_size = struct.unpack_from("<I", headers, entry_offset + 16)[0]
+            return module_base + virtual_address, virtual_size
+
+        raise RuntimeError(f"could not find section {section_name} in module")
+
     def _snapshot_auto_attach_list(self) -> None:
         result = self._call("ce.get_auto_attach_list")
         self.auto_attach_original = list(result.get("entries", []))
@@ -439,6 +477,17 @@ return { base = base }
             end_address=scratch_end_symbol,
             max_results=4,
         )
+        text_base, _ = self._find_pe_section(self.primary_module_base, ".text")
+        text_pattern = " ".join(f"{byte:02X}" for byte in self._read_memory_bytes(text_base, 16))
+        self._call(
+            "ce.aob_scan",
+            pattern=text_pattern,
+            module_name=self.primary_module_name,
+            section_name=".text",
+            scan_alignment="x16",
+            scan_hint="x86_64",
+            max_results=2,
+        )
         read_result = self._call("ce.read_memory", address=scratch_symbol, size=8)
         self._call("ce.write_memory", address=scratch_symbol, bytes_hex=str(read_result["bytes_hex"]))
         self._call("ce.exported.list", available_only=False, limit=32)
@@ -466,7 +515,14 @@ return { base = base }
         self._call("ce.reinitialize_symbolhandler")
         self._call("ce.in_module", address=self.primary_module_base)
         self._call("ce.in_system_module", address=self.system_function_address)
-        self._call("ce.aob_scan_unique", pattern=self.remote_scratch.pattern_hex)
+        self._call(
+            "ce.aob_scan_unique",
+            pattern=self.remote_scratch.pattern_hex,
+            start_address=self.remote_scratch.pattern_address,
+            end_address=self.remote_scratch.pattern_address + 0x20,
+            scan_alignment="x16",
+            scan_hint="pair0",
+        )
         self._call(
             "ce.aob_scan_module_unique",
             module_name=self.primary_module_name,

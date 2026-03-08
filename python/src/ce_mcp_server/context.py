@@ -75,13 +75,7 @@ class ToolContext:
         return self.get_bridge().list_sessions()
 
     def resolve_session_id(self, session_id: str | None = None) -> str:
-        if session_id:
-            return session_id
-
-        sessions = self.list_sessions()
-        if not sessions:
-            raise NoSessionError("no active Cheat Engine sessions are connected")
-        return str(sessions[0]["session_id"])
+        return self.get_bridge().resolve_session_id(session_id)
 
     def invalidate_runtime_cache(self, session_id: str | None = None) -> None:
         with self._runtime_lock:

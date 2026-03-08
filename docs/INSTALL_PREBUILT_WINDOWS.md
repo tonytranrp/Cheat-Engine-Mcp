@@ -4,11 +4,11 @@ This guide is for users who want the prebuilt Cheat Engine plugin DLLs instead o
 
 ## What To Download
 
-For `v0.2.5`, download:
+For `v0.2.7`, download:
 
-- `releases/v0.2.5/ce_mcp_plugin.dll`
-- `releases/v0.2.5/ce_mcp_plugin_core.dll`
-- `releases/v0.2.5/cheat-engine-mcp-0.2.5-windows-x64.zip`
+- `releases/v0.2.7/ce_mcp_plugin.dll`
+- `releases/v0.2.7/ce_mcp_plugin_core.dll`
+- `releases/v0.2.7/cheat-engine-mcp-0.2.7-windows-x64.zip`
 
 Recommended:
 
@@ -40,7 +40,7 @@ Inside the ZIP:
 
 ## Install Steps
 
-1. Download `releases/v0.2.5/cheat-engine-mcp-0.2.5-windows-x64.zip`.
+1. Download `releases/v0.2.7/cheat-engine-mcp-0.2.7-windows-x64.zip`.
 2. Extract the ZIP to a stable folder.
 3. Open Cheat Engine.
 4. Go to `Edit -> Settings -> Plugins`.

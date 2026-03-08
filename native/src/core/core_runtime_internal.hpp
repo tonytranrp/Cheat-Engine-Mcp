@@ -112,18 +112,15 @@ struct SymbolResolutionResult
     std::string resolved_via;
 };
 
-struct AobPatternByte
-{
-    bool wildcard = false;
-    unsigned char value = 0;
-};
-
 struct AobScanQuery
 {
-    std::vector<AobPatternByte> pattern;
+    std::string pattern_text;
     std::optional<std::string> module_name;
+    std::optional<std::string> section_name;
     std::optional<std::uint64_t> start_address;
     std::optional<std::uint64_t> end_address;
+    std::uint8_t scan_alignment = 1;
+    std::uint64_t scan_hints = 0;
     std::size_t max_results = kDefaultAobResultLimit;
 };
 
@@ -191,10 +188,6 @@ bool equals_case_insensitive(std::string_view left, std::string_view right);
 bool is_readable_protection(DWORD protect);
 bool is_writable_protection(DWORD protect);
 bool is_executable_protection(DWORD protect);
-std::optional<std::vector<AobPatternByte>> parse_aob_pattern(std::string_view text);
-bool aob_matches_at(const std::vector<unsigned char>& buffer,
-                    std::size_t start_index,
-                    const std::vector<AobPatternByte>& pattern);
 
 struct CoreRuntime::Impl
 {

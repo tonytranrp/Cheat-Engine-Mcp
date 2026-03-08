@@ -2,6 +2,8 @@
 
 This document records the live CE MCP audit run against `Minecraft.Windows.exe`, the user-facing inconveniences found during that pass, and the fixes added immediately afterward.
 
+The follow-up `0.2.7` libhat rewrite and the updated signature-scan benchmarks are documented in `docs/LIBHAT_SIGSCAN_REWRITE_2026-03-08.md`.
+
 ## Target
 
 - Process: `Minecraft.Windows.exe`

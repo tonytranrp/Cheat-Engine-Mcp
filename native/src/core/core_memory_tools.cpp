@@ -1,11 +1,244 @@
 #include "core_runtime_internal.hpp"
 
+#include <libhat/scanner.hpp>
+
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <limits>
 #include <sstream>
 
 namespace ce_mcp
 {
+namespace
+{
+constexpr std::size_t kRemotePeHeaderReadSize = 16 * 1024;
+constexpr std::uint8_t kAobAlignmentX1 = 1;
+constexpr std::uint8_t kAobAlignmentX16 = 16;
+constexpr std::uint64_t kAobHintNone = 0;
+constexpr std::uint64_t kAobHintX86_64 = 1ull << 0;
+constexpr std::uint64_t kAobHintPair0 = 1ull << 1;
+
+std::string trim_trailing_nuls(std::string value)
+{
+    while (!value.empty() && value.back() == '\0')
+    {
+        value.pop_back();
+    }
+    return value;
+}
+
+std::string normalize_section_name(std::string_view value)
+{
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (const char ch : value)
+    {
+        if (ch != '\0')
+        {
+            normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+    }
+
+    if (!normalized.empty() && normalized.front() == '.')
+    {
+        normalized.erase(normalized.begin());
+    }
+    return normalized;
+}
+
+std::optional<std::uint8_t> parse_aob_scan_alignment(std::string_view text)
+{
+    const std::string trimmed = trim_ascii(std::string(text));
+    if (trimmed.empty())
+    {
+        return std::nullopt;
+    }
+
+    if (equals_case_insensitive(trimmed, "1") || equals_case_insensitive(trimmed, "x1"))
+    {
+        return kAobAlignmentX1;
+    }
+    if (equals_case_insensitive(trimmed, "16") || equals_case_insensitive(trimmed, "x16"))
+    {
+        return kAobAlignmentX16;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint64_t> parse_aob_scan_hints(std::string_view text)
+{
+    std::string normalized = trim_ascii(std::string(text));
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char ch)
+                   {
+                       if (ch == ',' || ch == '+' || ch == ';')
+                       {
+                           return '|';
+                       }
+                       return static_cast<char>(std::tolower(ch));
+                   });
+
+    if (normalized.empty() || normalized == "none")
+    {
+        return kAobHintNone;
+    }
+
+    std::uint64_t hints = kAobHintNone;
+    std::istringstream stream(normalized);
+    std::string token;
+    while (std::getline(stream, token, '|'))
+    {
+        token = trim_ascii(token);
+        if (token.empty() || token == "none")
+        {
+            continue;
+        }
+        if (token == "x86_64" || token == "x86-64" || token == "x64")
+        {
+            hints |= kAobHintX86_64;
+            continue;
+        }
+        if (token == "pair0")
+        {
+            hints |= kAobHintPair0;
+            continue;
+        }
+        return std::nullopt;
+    }
+    return hints;
+}
+
+hat::scan_alignment to_libhat_scan_alignment(const std::uint8_t alignment)
+{
+    return alignment == kAobAlignmentX16 ? hat::scan_alignment::X16 : hat::scan_alignment::X1;
+}
+
+hat::scan_hint to_libhat_scan_hint(const std::uint64_t hints)
+{
+    hat::scan_hint result = hat::scan_hint::none;
+    if ((hints & kAobHintX86_64) != 0)
+    {
+        result |= hat::scan_hint::x86_64;
+    }
+    if ((hints & kAobHintPair0) != 0)
+    {
+        result |= hat::scan_hint::pair0;
+    }
+    return result;
+}
+
+std::string format_aob_scan_alignment(const std::uint8_t alignment)
+{
+    return alignment == kAobAlignmentX16 ? "x16" : "x1";
+}
+
+std::string format_aob_scan_hints(const std::uint64_t hints)
+{
+    if (hints == kAobHintNone)
+    {
+        return "none";
+    }
+
+    std::string result;
+    if ((hints & kAobHintX86_64) != 0)
+    {
+        result += "x86_64";
+    }
+    if ((hints & kAobHintPair0) != 0)
+    {
+        if (!result.empty())
+        {
+            result += "|";
+        }
+        result += "pair0";
+    }
+    return result;
+}
+
+std::optional<std::pair<std::uint64_t, std::uint64_t>> resolve_remote_module_section(HANDLE process,
+                                                                                      const std::uint64_t module_base,
+                                                                                      const std::uint64_t module_size,
+                                                                                      std::string_view section_name)
+{
+    std::vector<unsigned char> buffer(static_cast<std::size_t>(
+        std::min<std::uint64_t>(module_size == 0 ? kRemotePeHeaderReadSize : module_size, kRemotePeHeaderReadSize)));
+    SIZE_T bytes_read = 0;
+    const BOOL ok = ::ReadProcessMemory(
+        process,
+        reinterpret_cast<LPCVOID>(static_cast<UINT_PTR>(module_base)),
+        buffer.data(),
+        buffer.size(),
+        &bytes_read);
+    if ((ok == FALSE && bytes_read == 0) || bytes_read < sizeof(IMAGE_DOS_HEADER))
+    {
+        return std::nullopt;
+    }
+
+    buffer.resize(static_cast<std::size_t>(bytes_read));
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(buffer.data());
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0)
+    {
+        return std::nullopt;
+    }
+
+    const std::size_t nt_offset = static_cast<std::size_t>(dos->e_lfanew);
+    if (nt_offset + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) > buffer.size())
+    {
+        return std::nullopt;
+    }
+
+    const auto signature = *reinterpret_cast<const DWORD*>(buffer.data() + nt_offset);
+    if (signature != IMAGE_NT_SIGNATURE)
+    {
+        return std::nullopt;
+    }
+
+    const auto* file_header = reinterpret_cast<const IMAGE_FILE_HEADER*>(buffer.data() + nt_offset + sizeof(DWORD));
+    const std::size_t section_offset =
+        nt_offset + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) + static_cast<std::size_t>(file_header->SizeOfOptionalHeader);
+    const std::size_t section_table_size =
+        static_cast<std::size_t>(file_header->NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+    if (section_offset + section_table_size > buffer.size())
+    {
+        return std::nullopt;
+    }
+
+    const std::string requested = normalize_section_name(section_name);
+    const auto* sections = reinterpret_cast<const IMAGE_SECTION_HEADER*>(buffer.data() + section_offset);
+    for (std::size_t index = 0; index < file_header->NumberOfSections; ++index)
+    {
+        const auto& section = sections[index];
+        const std::string current = normalize_section_name(
+            std::string_view(reinterpret_cast<const char*>(section.Name), sizeof(section.Name)));
+        if (current != requested)
+        {
+            continue;
+        }
+
+        const std::uint64_t start = module_base + static_cast<std::uint64_t>(section.VirtualAddress);
+        std::uint64_t size = static_cast<std::uint64_t>(section.Misc.VirtualSize);
+        if (size == 0)
+        {
+            size = static_cast<std::uint64_t>(section.SizeOfRawData);
+        }
+        if (module_size != 0)
+        {
+            const std::uint64_t module_end = module_base + module_size;
+            const std::uint64_t max_size = module_end > start ? module_end - start : 0;
+            size = std::min(size, max_size);
+        }
+        if (size == 0)
+        {
+            return std::nullopt;
+        }
+        return std::make_pair(start, start + size);
+    }
+
+    return std::nullopt;
+}
+}
+
 std::string CoreRuntime::Impl::make_query_memory_response(std::string_view request_id, std::string_view line) const
 {
     const auto address_text = extract_simple_field(line, "address");
@@ -198,17 +431,28 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
     }
 
     AobScanQuery query;
-    const auto pattern = parse_aob_pattern(*pattern_text);
-    if (!pattern)
+    const auto parsed_signature = hat::parse_signature(*pattern_text);
+    if (!parsed_signature.has_value() || parsed_signature.value().empty())
     {
         return make_error_response(request_id, "invalid_pattern");
     }
 
-    query.pattern = *pattern;
+    query.pattern_text = *pattern_text;
 
     if (const auto module_name = extract_string_field(line, "module_name"))
     {
         query.module_name = *module_name;
+    }
+
+    if (const auto section_name = extract_simple_field(line, "section_name"))
+    {
+        const std::string normalized = trim_ascii(*section_name);
+        if (normalized.empty())
+        {
+            return make_error_response(request_id, "invalid_section_name");
+        }
+
+        query.section_name = normalized;
     }
 
     if (const auto start_text = extract_simple_field(line, "start_address"))
@@ -238,6 +482,16 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
         return make_error_response(request_id, "invalid_address_range");
     }
 
+    if (query.module_name && (query.start_address || query.end_address))
+    {
+        return make_error_response(request_id, "invalid_scan_scope");
+    }
+
+    if (query.section_name && !query.module_name)
+    {
+        return make_error_response(request_id, "section_requires_module");
+    }
+
     if (const auto max_results_text = extract_simple_field(line, "max_results"))
     {
         const auto parsed_limit = parse_unsigned_integer(*max_results_text);
@@ -247,6 +501,33 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
         }
 
         query.max_results = static_cast<std::size_t>(*parsed_limit);
+    }
+
+    if (const auto alignment_text = extract_simple_field(line, "scan_alignment"))
+    {
+        const auto parsed_alignment = parse_aob_scan_alignment(*alignment_text);
+        if (!parsed_alignment)
+        {
+            return make_error_response(request_id, "invalid_scan_alignment");
+        }
+
+        query.scan_alignment = *parsed_alignment;
+    }
+
+    auto hint_text = extract_simple_field(line, "scan_hint");
+    if (!hint_text)
+    {
+        hint_text = extract_simple_field(line, "scan_hints");
+    }
+    if (hint_text)
+    {
+        const auto parsed_hints = parse_aob_scan_hints(*hint_text);
+        if (!parsed_hints)
+        {
+            return make_error_response(request_id, "invalid_scan_hint");
+        }
+
+        query.scan_hints = *parsed_hints;
     }
 
     AobScanResult result;
@@ -280,6 +561,10 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
     {
         stream << ",\"module_name\":\"" << escape_json_string(*query.module_name) << "\"";
     }
+    if (query.section_name)
+    {
+        stream << ",\"section_name\":\"" << escape_json_string(*query.section_name) << "\"";
+    }
     if (query.start_address)
     {
         stream << ",\"start_address\":" << *query.start_address;
@@ -288,6 +573,8 @@ std::string CoreRuntime::Impl::make_aob_scan_response(std::string_view request_i
     {
         stream << ",\"end_address\":" << *query.end_address;
     }
+    stream << ",\"scan_alignment\":\"" << format_aob_scan_alignment(query.scan_alignment) << "\""
+           << ",\"scan_hint\":\"" << format_aob_scan_hints(query.scan_hints) << "\"";
     stream << ",\"scanned_region_count\":" << result.scanned_region_count
            << ",\"scanned_byte_count\":" << result.scanned_byte_count
            << ",\"returned_count\":" << result.matches.size()
@@ -576,8 +863,31 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
     ScopedHandle process(context.handle);
     result.process_id = context.process_id;
 
+    const auto parsed_signature = hat::parse_signature(query.pattern_text);
+    if (!parsed_signature.has_value() || parsed_signature.value().empty())
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    const auto& signature = parsed_signature.value();
+    const std::size_t pattern_size = signature.size();
+    if (pattern_size == 0)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
     std::uint64_t start_address = 0;
     std::uint64_t end_address = 0;
+
+    if (query.section_name && !query.module_name)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    if (query.module_name && (query.start_address || query.end_address))
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
 
     if (query.module_name)
     {
@@ -587,8 +897,26 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
             return ERROR_NOT_FOUND;
         }
 
-        start_address = module->base_address;
-        end_address = module->base_address + module->size;
+        if (query.section_name)
+        {
+            const auto bounds = resolve_remote_module_section(
+                process.get(),
+                module->base_address,
+                module->size,
+                *query.section_name);
+            if (!bounds)
+            {
+                return ERROR_NOT_FOUND;
+            }
+
+            start_address = bounds->first;
+            end_address = bounds->second;
+        }
+        else
+        {
+            start_address = module->base_address;
+            end_address = module->base_address + module->size;
+        }
     }
     else if (query.start_address || query.end_address)
     {
@@ -608,12 +936,6 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
         return map_error;
     }
 
-    const std::size_t pattern_size = query.pattern.size();
-    if (pattern_size == 0)
-    {
-        return ERROR_INVALID_PARAMETER;
-    }
-
     for (const auto& region : map_result.regions)
     {
         if (region.state != MEM_COMMIT || !region.readable || region.guarded || region.region_size < pattern_size)
@@ -621,10 +943,19 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
             continue;
         }
 
+        const std::uint64_t region_scan_start = std::max(region.base_address, start_address);
+        const std::uint64_t region_scan_end =
+            end_address == 0 ? region.base_address + region.region_size
+                             : std::min(region.base_address + region.region_size, end_address);
+        if (region_scan_end <= region_scan_start || region_scan_end - region_scan_start < pattern_size)
+        {
+            continue;
+        }
+
         ++result.scanned_region_count;
 
-        const std::uint64_t region_end = region.base_address + region.region_size;
-        std::uint64_t cursor = region.base_address;
+        const std::uint64_t region_end = region_scan_end;
+        std::uint64_t cursor = region_scan_start;
         std::vector<unsigned char> overlap;
 
         while (cursor < region_end)
@@ -647,41 +978,68 @@ std::optional<DWORD> CoreRuntime::Impl::aob_scan(const AobScanQuery& query, AobS
             chunk.resize(static_cast<std::size_t>(bytes_read));
             if (!chunk.empty())
             {
-                std::vector<unsigned char> buffer;
-                if (!overlap.empty())
+                const std::uint64_t buffer_base = cursor - static_cast<std::uint64_t>(overlap.size());
+                const std::size_t total_size = overlap.size() + chunk.size();
+                std::vector<unsigned char> scan_storage(total_size + (query.scan_alignment == kAobAlignmentX16 ? 15u : 0u));
+                unsigned char* scan_begin = scan_storage.data();
+
+                if (query.scan_alignment == kAobAlignmentX16)
                 {
-                    buffer.reserve(overlap.size() + chunk.size());
-                    buffer.insert(buffer.end(), overlap.begin(), overlap.end());
-                    buffer.insert(buffer.end(), chunk.begin(), chunk.end());
-                }
-                else
-                {
-                    buffer = chunk;
+                    const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(scan_begin);
+                    const std::uintptr_t desired_mod = static_cast<std::uintptr_t>(buffer_base & 0x0Fu);
+                    const std::uintptr_t offset = (desired_mod + 16u - (base & 0x0Fu)) & 0x0Fu;
+                    scan_begin += offset;
                 }
 
-                const std::uint64_t buffer_base = cursor - overlap.size();
-                if (buffer.size() >= pattern_size)
+                if (!overlap.empty())
                 {
-                    for (std::size_t index = 0; index + pattern_size <= buffer.size(); ++index)
+                    std::copy(overlap.begin(), overlap.end(), scan_begin);
+                }
+
+                std::copy(chunk.begin(), chunk.end(), scan_begin + overlap.size());
+                if (total_size >= pattern_size)
+                {
+                    const auto* scan_bytes_begin = reinterpret_cast<const std::byte*>(scan_begin);
+                    const auto* scan_bytes_end = scan_bytes_begin + total_size;
+                    const std::size_t remaining_results = query.max_results - result.matches.size();
+                    std::vector<hat::const_scan_result> local_matches(remaining_results);
+                    const auto [scan_end, used_end] = hat::find_all_pattern(
+                        scan_bytes_begin,
+                        scan_bytes_end,
+                        local_matches.begin(),
+                        local_matches.end(),
+                        signature,
+                        to_libhat_scan_alignment(query.scan_alignment),
+                        to_libhat_scan_hint(query.scan_hints));
+                    const std::size_t match_count = static_cast<std::size_t>(std::distance(local_matches.begin(), used_end));
+
+                    for (std::size_t index = 0; index < match_count; ++index)
                     {
-                        if (!aob_matches_at(buffer, index, query.pattern))
+                        const auto match = local_matches[index];
+                        if (!match.has_result())
                         {
                             continue;
                         }
-
-                        result.matches.push_back(buffer_base + index);
+                        const auto match_offset = static_cast<std::size_t>(match.get() - scan_bytes_begin);
+                        result.matches.push_back(buffer_base + static_cast<std::uint64_t>(match_offset));
                         if (result.matches.size() >= query.max_results)
                         {
                             result.truncated = true;
                             return std::nullopt;
                         }
                     }
+
+                    if (match_count == remaining_results && scan_end != scan_bytes_end)
+                    {
+                        result.truncated = true;
+                        return std::nullopt;
+                    }
                 }
 
                 const std::size_t overlap_size = std::min<std::size_t>(
                     pattern_size > 0 ? pattern_size - 1 : 0,
-                    buffer.size());
-                overlap.assign(buffer.end() - overlap_size, buffer.end());
+                    total_size);
+                overlap.assign(scan_begin + total_size - overlap_size, scan_begin + total_size);
                 result.scanned_byte_count += static_cast<std::uint64_t>(chunk.size());
             }
 

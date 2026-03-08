@@ -14,7 +14,7 @@ if str(PYTHON_SRC) not in sys.path:
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from ce_mcp_server.tools import register_all
+from ce_mcp_server.tools import register_all, scan_helper_tools, script_tools
 from test_support import FakeServer, FakeToolContext, build_sample_args
 
 
@@ -98,6 +98,80 @@ class ToolSurfaceTests(unittest.TestCase):
     def test_lua_reset_environment_exists(self) -> None:
         result = self.server.tools["ce.lua_reset_environment"](session_id="ce-test")
         self.assertTrue(result["reset"])
+
+    def test_lua_exec_accepts_timeout_override(self) -> None:
+        server = FakeServer()
+        context = FakeToolContext()
+        script_tools.register(server, context)
+
+        result = server.tools["ce.lua_exec"](script="return 1", timeout_seconds=90.0, session_id="ce-test")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(context.script_calls[-1][0], "lua_exec")
+        self.assertEqual(context.script_calls[-1][-1], 90.0)
+
+    def test_scan_string_case_sensitive_module_uses_exact_aob_fast_path(self) -> None:
+        server = FakeServer()
+        context = FakeToolContext()
+        scan_helper_tools.register(server, context)
+
+        result = server.tools["ce.scan_string"](
+            text="inventory",
+            encoding="ascii",
+            case_sensitive=True,
+            module_name="game.exe",
+            timeout_seconds=90.0,
+            session_id="ce-test",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["strategy"], "native_exact_aob")
+        self.assertEqual(result["returned_count"], 1)
+        self.assertEqual(context.native_calls[-1][0], "ce.aob_scan")
+        self.assertEqual(context.native_calls[-1][-1], 90.0)
+
+    def test_aob_scan_supports_libhat_scope_controls(self) -> None:
+        result = self.server.tools["ce.aob_scan"](
+            pattern="48 8B ?? ?? FF",
+            module_name="game.exe",
+            section_name=".text",
+            scan_alignment="x16",
+            scan_hint="x86_64|pair0",
+            timeout_seconds=45.0,
+            session_id="ce-test",
+        )
+
+        self.assertTrue(result["ok"])
+        tool_name, payload, _, timeout_seconds = self.context.native_calls[-1]
+        self.assertEqual(tool_name, "ce.aob_scan")
+        self.assertEqual(payload["module_name"], "game.exe")
+        self.assertEqual(payload["section_name"], ".text")
+        self.assertEqual(payload["scan_alignment"], "x16")
+        self.assertEqual(payload["scan_hint"], "x86_64|pair0")
+        self.assertEqual(timeout_seconds, 45.0)
+
+    def test_aob_scan_module_unique_uses_native_libhat_scan(self) -> None:
+        result = self.server.tools["ce.aob_scan_module_unique"](
+            module_name="game.exe",
+            pattern="48 8B ?? ?? FF",
+            section_name=".rdata",
+            scan_alignment="x16",
+            scan_hint="pair0",
+            timeout_seconds=75.0,
+            session_id="ce-test",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["unique"])
+        self.assertEqual(result["address"], 0x140000200)
+        tool_name, payload, _, timeout_seconds = self.context.native_calls[-1]
+        self.assertEqual(tool_name, "ce.aob_scan")
+        self.assertEqual(payload["module_name"], "game.exe")
+        self.assertEqual(payload["section_name"], ".rdata")
+        self.assertEqual(payload["scan_alignment"], "x16")
+        self.assertEqual(payload["scan_hint"], "pair0")
+        self.assertEqual(payload["max_results"], 2)
+        self.assertEqual(timeout_seconds, 75.0)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from ..context import ToolContext
 from ..registration import ParameterSpec, ToolSpec, register_specs
 from ..runtime.lua_runtime import LUA_RUNTIME
 
+SCRIPT_TIMEOUT_PARAMETER = ParameterSpec("timeout_seconds", float, 30.0)
+
 
 def _wrap_lua_with_globals(ctx: ToolContext, script: str, globals_map: dict[str, object] | None, *, as_expression: bool) -> str:
     globals_literal = ctx.to_lua_literal(globals_map or {})
@@ -44,14 +46,14 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
         ToolSpec(
             name="ce.lua_eval",
             description="Evaluate a Lua expression inside Cheat Engine and JSON-encode the result.",
-            parameters=(ParameterSpec("script", str), ParameterSpec("session_id", str | None, None)),
-            handler=lambda script, session_id=None: ctx.lua_eval(script, session_id=session_id),
+            parameters=(ParameterSpec("script", str), SCRIPT_TIMEOUT_PARAMETER, ParameterSpec("session_id", str | None, None)),
+            handler=lambda script, timeout_seconds=30.0, session_id=None: ctx.lua_eval(script, session_id=session_id, timeout_seconds=timeout_seconds),
         ),
         ToolSpec(
             name="ce.lua_exec",
             description="Execute a Lua chunk inside Cheat Engine and JSON-encode its returned value.",
-            parameters=(ParameterSpec("script", str), ParameterSpec("session_id", str | None, None)),
-            handler=lambda script, session_id=None: ctx.lua_exec(script, session_id=session_id),
+            parameters=(ParameterSpec("script", str), SCRIPT_TIMEOUT_PARAMETER, ParameterSpec("session_id", str | None, None)),
+            handler=lambda script, timeout_seconds=30.0, session_id=None: ctx.lua_exec(script, session_id=session_id, timeout_seconds=timeout_seconds),
         ),
         ToolSpec(
             name="ce.lua_eval_with_globals",
@@ -59,11 +61,13 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
             parameters=(
                 ParameterSpec("script", str),
                 ParameterSpec("globals", dict[str, object], {}),
+                SCRIPT_TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
-            handler=lambda script, globals=None, session_id=None: ctx.lua_exec(
+            handler=lambda script, globals=None, timeout_seconds=30.0, session_id=None: ctx.lua_exec(
                 _wrap_lua_with_globals(ctx, script, globals or {}, as_expression=True),
                 session_id=session_id,
+                timeout_seconds=timeout_seconds,
             ),
         ),
         ToolSpec(
@@ -72,18 +76,20 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
             parameters=(
                 ParameterSpec("script", str),
                 ParameterSpec("globals", dict[str, object], {}),
+                SCRIPT_TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
-            handler=lambda script, globals=None, session_id=None: ctx.lua_exec(
+            handler=lambda script, globals=None, timeout_seconds=30.0, session_id=None: ctx.lua_exec(
                 _wrap_lua_with_globals(ctx, script, globals or {}, as_expression=False),
                 session_id=session_id,
+                timeout_seconds=timeout_seconds,
             ),
         ),
         ToolSpec(
             name="ce.auto_assemble",
             description="Run a raw Cheat Engine Auto Assemble script.",
-            parameters=(ParameterSpec("script", str), ParameterSpec("session_id", str | None, None)),
-            handler=lambda script, session_id=None: ctx.auto_assemble(script, session_id=session_id),
+            parameters=(ParameterSpec("script", str), SCRIPT_TIMEOUT_PARAMETER, ParameterSpec("session_id", str | None, None)),
+            handler=lambda script, timeout_seconds=30.0, session_id=None: ctx.auto_assemble(script, session_id=session_id, timeout_seconds=timeout_seconds),
         ),
         ToolSpec(
             name="ce.lua_call",
@@ -92,37 +98,41 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 ParameterSpec("function_name", str),
                 ParameterSpec("args", list[object], []),
                 ParameterSpec("result_field", str, "value"),
+                SCRIPT_TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
-            handler=lambda function_name, args=None, result_field="value", session_id=None: ctx.call_lua_function(function_name, args=args or [], session_id=session_id, result_field=result_field),
+            handler=lambda function_name, args=None, result_field="value", timeout_seconds=30.0, session_id=None: ctx.call_lua_function(function_name, args=args or [], session_id=session_id, result_field=result_field, timeout_seconds=timeout_seconds),
         ),
         ToolSpec(
             name="ce.lua_get_global",
             description="Read a global Lua value from Cheat Engine by variable name.",
-            parameters=(ParameterSpec("variable_name", str), ParameterSpec("session_id", str | None, None)),
-            handler=lambda variable_name, session_id=None: ctx.lua_exec(
+            parameters=(ParameterSpec("variable_name", str), SCRIPT_TIMEOUT_PARAMETER, ParameterSpec("session_id", str | None, None)),
+            handler=lambda variable_name, timeout_seconds=30.0, session_id=None: ctx.lua_exec(
                 f"return {{name = {ctx.to_lua_literal(variable_name)}, value = rawget(_G, {ctx.to_lua_literal(variable_name)})}}",
                 session_id=session_id,
+                timeout_seconds=timeout_seconds,
             ),
         ),
         ToolSpec(
             name="ce.lua_set_global",
             description="Set a global Lua variable inside Cheat Engine.",
-            parameters=(ParameterSpec("variable_name", str), ParameterSpec("value", object), ParameterSpec("session_id", str | None, None)),
-            handler=lambda variable_name, value, session_id=None: ctx.lua_exec(
+            parameters=(ParameterSpec("variable_name", str), ParameterSpec("value", object), SCRIPT_TIMEOUT_PARAMETER, ParameterSpec("session_id", str | None, None)),
+            handler=lambda variable_name, value, timeout_seconds=30.0, session_id=None: ctx.lua_exec(
                 f"rawset(_G, {ctx.to_lua_literal(variable_name)}, {ctx.to_lua_literal(value)})\nreturn {{name = {ctx.to_lua_literal(variable_name)}, value = rawget(_G, {ctx.to_lua_literal(variable_name)})}}",
                 session_id=session_id,
+                timeout_seconds=timeout_seconds,
             ),
         ),
         ToolSpec(
             name="ce.run_script_file",
             description="Load a local Lua script file from disk and execute it inside Cheat Engine using loadfile.",
-            parameters=(ParameterSpec("path", str), ParameterSpec("session_id", str | None, None)),
-            handler=lambda path, session_id=None: ctx.call_runtime_function(
+            parameters=(ParameterSpec("path", str), SCRIPT_TIMEOUT_PARAMETER, ParameterSpec("session_id", str | None, None)),
+            handler=lambda path, timeout_seconds=30.0, session_id=None: ctx.call_runtime_function(
                 LUA_RUNTIME,
                 "run_file",
                 args=[str(Path(path))],
                 session_id=session_id,
+                timeout_seconds=timeout_seconds,
             ),
         ),
     ]

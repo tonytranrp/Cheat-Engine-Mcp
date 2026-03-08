@@ -15,6 +15,9 @@ class FakeBridge:
             "sessions": [{"session_id": "ce-test"}],
         }
 
+    def resolve_session_id(self, session_id: str | None = None) -> str:
+        return session_id or "ce-test"
+
 
 class FakeToolContext:
     def __init__(self) -> None:
@@ -22,6 +25,7 @@ class FakeToolContext:
         self.native_calls: list[tuple[str, dict[str, Any] | None, str | None, float]] = []
         self.runtime_calls: list[tuple[str, str, list[Any] | tuple[Any, ...] | None, str | None, float]] = []
         self.lua_calls: list[tuple[str, str, list[Any] | tuple[Any, ...] | None, str | None, str, float]] = []
+        self.script_calls: list[tuple[str, str, str | None, float]] = []
 
     def get_bridge(self) -> FakeBridge:
         return self.bridge
@@ -102,6 +106,16 @@ class FakeToolContext:
             return {"ok": True, "address": 0x140000000, "bytes_read": 16, "bytes_hex": "4D5A9000"}
         if tool_name == "ce.write_memory":
             return {"ok": True, "address": 0x140000000, "bytes_written": 1, "bytes_hex": "90"}
+        if tool_name == "ce.aob_scan":
+            pattern = str((payload or {}).get("pattern", ""))
+            matches = [0x140000200] if pattern else []
+            return {
+                "ok": True,
+                "matches": matches,
+                "returned_count": len(matches),
+                "truncated": False,
+                "session_id": session_id or "ce-test",
+            }
         if tool_name == "ce.resolve_symbol":
             if payload and "symbol" in payload:
                 return {"ok": True, "symbol": str(payload["symbol"]), "address": 0x140000000, "resolved_via": "ce_symbol"}
@@ -132,12 +146,15 @@ class FakeToolContext:
         return result
 
     def lua_eval(self, script: str, session_id: str | None = None, timeout_seconds: float = 30.0) -> dict[str, Any]:
+        self.script_calls.append(("lua_eval", script, session_id, timeout_seconds))
         return {"ok": True, "value": script, "session_id": session_id or "ce-test"}
 
     def lua_exec(self, script: str, session_id: str | None = None, timeout_seconds: float = 30.0) -> dict[str, Any]:
+        self.script_calls.append(("lua_exec", script, session_id, timeout_seconds))
         return {"ok": True, "value": script, "session_id": session_id or "ce-test"}
 
     def auto_assemble(self, script: str, session_id: str | None = None, timeout_seconds: float = 30.0) -> dict[str, Any]:
+        self.script_calls.append(("auto_assemble", script, session_id, timeout_seconds))
         return {"ok": True, "success": True, "script": script, "session_id": session_id or "ce-test"}
 
     def call_lua_function(self,
@@ -473,6 +490,7 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
         "alignment_type": "not_aligned",
         "alignment_param": "1",
         "saved_result_name": "saved",
+        "timeout_seconds": 60.0,
         "include_script": False,
         "active": True,
         "enabled": True,
@@ -553,6 +571,9 @@ def build_sample_args(tool_name: str, signature: inspect.Signature) -> dict[str,
         overrides["options"] = {"scan_option": "exact", "value_type": "dword", "input1": "100"}
     if tool_name == "ce.scan_string":
         overrides["encoding"] = "both"
+        overrides["start_address"] = None
+        overrides["end_address"] = None
+    if tool_name in {"ce.aob_scan", "ce.aob_scan_unique"}:
         overrides["start_address"] = None
         overrides["end_address"] = None
     if tool_name in {"ce.scan_first_ex", "ce.scan_once", "ce.scan_value"}:

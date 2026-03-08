@@ -282,6 +282,7 @@ Meaning:
 Important:
 
 - `ce.aob_scan` is the right tool for raw byte patterns
+- `0.2.7` routes `ce.aob_scan`, `ce.aob_scan_unique`, and `ce.aob_scan_module_unique` through `libhat`
 - it is not the best tool for normal text search
 - for strings, prefer `ce.scan_string`
 - for typed CE memscan workflows, prefer `ce.scan_value` or `ce.scan_once`
@@ -289,8 +290,10 @@ Important:
 Fixes:
 
 - add `module_name`
+- add `section_name` when you only need one PE section such as `.text` or `.rdata`
 - add `start_address` / `end_address`
 - lower `max_results`
+- raise `timeout_seconds` for intentionally large scans
 - use the persistent scan tools instead of a single full-process AOB scan:
   - `ce.scan_create_session`
   - `ce.scan_first`
@@ -303,10 +306,22 @@ Preferred pattern:
 ce.aob_scan(pattern="69 6E 76 65 6E 74 6F 72 79", module_name="Minecraft.Windows.exe", max_results=20)
 ```
 
+Preferred code-signature pattern:
+
+```text
+ce.aob_scan(pattern="48 8D 0D ?? ?? ?? ?? E9 ?? ?? ?? ?? CC CC CC CC", module_name="Minecraft.Windows.exe", section_name=".text", scan_alignment="x16", scan_hint="x86_64", max_results=4)
+```
+
 Preferred text-search pattern:
 
 ```text
 ce.scan_string(text="inventory", encoding="both", module_name="Minecraft.Windows.exe")
+```
+
+Preferred scoped unique-scan pattern:
+
+```text
+ce.aob_scan_unique(pattern="43 45 20 4D 43 50 20 4C 49 56 45 20 50 41 54 54 45 52 4E 20 30 31", start_address=0x12340000, end_address=0x12340040, scan_alignment="x16", scan_hint="pair0")
 ```
 
 ### `list_modules` or `resolve_symbol` times out after a previous long scan

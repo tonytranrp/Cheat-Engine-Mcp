@@ -22,53 +22,52 @@ It gives Codex a live Cheat Engine backend for process attach, memory access, po
 - Raw SDK visibility
   - full copied `ExportedFunctions` block exposed through MCP metadata tools
 
-## What Changed In 0.2.6
+## What Changed In 0.2.7
 
-This pass adds a Minecraft-backed live audit/benchmark workflow, new Lua environment cleanup helpers, and a native attach fast-path for already-attached targets.
+This pass rewrites the signature-scanning path around vendored `libhat`, hardens long-running live workflows, and updates the dev validation flow around real Minecraft runs.
 
 ### New API surface
 
-- New structure-instance dump helper:
-  - `ce.structure_read`
-- New Lua environment and preload helpers:
-  - `ce.lua_get_environment`
-  - `ce.lua_configure_environment`
-  - `ce.lua_remove_library_root`
-  - `ce.lua_remove_package_path`
-  - `ce.lua_remove_package_cpath`
-  - `ce.lua_reset_environment`
-  - `ce.lua_list_loaded_modules`
-  - `ce.lua_list_preloaded_modules`
-  - `ce.lua_preload_module`
-  - `ce.lua_preload_file`
-  - `ce.lua_unpreload_module`
-- New globals-scoped Lua execution helpers:
-  - `ce.lua_eval_with_globals`
-  - `ce.lua_exec_with_globals`
+- New libhat scan controls on the native scan surface:
+  - `ce.aob_scan(section_name=..., scan_alignment=..., scan_hint=..., timeout_seconds=...)`
+  - `ce.aob_scan_unique(...)`
+  - `ce.aob_scan_module_unique(...)`
 
 ### Fixes and behavior changes
 
-- The existing `ce.structure_*` and `ce.dissect_*` surface is now complemented by a direct instance reader so an address can be dumped as named fields after `ce.structure_define`, `ce.structure_auto_guess`, or `ce.structure_fill_from_dotnet`
-- The Lua runtime now supports removing library roots and resetting paths that were added through `ce.lua_configure_environment`, which keeps repeated CE sessions from accumulating stale temp paths
-- `ce.lua_eval_with_globals` and `ce.lua_exec_with_globals` let callers inject temporary globals without permanently mutating `_G`
-- The Python backend now loads a lightweight CE-side dispatcher once per session and routes repeated runtime/global Lua calls through it, reducing repeated script boilerplate and improving steady-state latency
-- The native `ce.attach_process` path now short-circuits when Cheat Engine is already attached to the requested PID instead of forcing an unnecessary reopen
+- Native signature scans now use vendored `libhat` instead of the older byte-by-byte matcher
+- `ce.aob_scan_unique` and `ce.aob_scan_module_unique` now route through the same libhat-backed path instead of older CE Lua helpers
+- Exact `ce.scan_string(...)` calls over a module or explicit range now reuse the fast native AOB path, which removes the slow timeout-prone Minecraft string-search path
+- The scan surface now supports PE-section scoping plus libhat alignment and hint controls
+- When a stale explicit `session_id` is provided and exactly one live bridge session exists, the backend now auto-recovers to the live session instead of hard-failing
+- Long-running Lua and scan helpers now accept `timeout_seconds` overrides so large targets do not silently inherit short default limits
+- Section-scoped scans now fall back to Python-side PE-section resolution on targets where the native header read path returns `ERROR_NOT_FOUND`
 
 ### Tooling and test improvements
 
-- Unit coverage now exercises `ce.structure_read` and globals-scoped Lua execution helpers
-- Live integration coverage now exercises the new structure dump path plus the expanded Lua package/preload workflow
-- The dev live suite can now target a custom primary process through `tools/dev/run-live-tool-suite.py --process-name ...` or `CE_MCP_PRIMARY_PROCESS`
-- `tools/dev/run-live-tool-suite.py --manage-existing-backend` now handles the normal `ce_mcp_server` listener conflict on port `5556`
-- `tools/dev/benchmark-live-tools.py` benchmarks repeated and mixed-parallel workflows against a live target
-- The live suite now records per-phase timings plus per-tool timing summaries so slow paths are visible immediately
-- Runtime module versions were bumped so updated helpers reload cleanly in existing CE sessions
+- Unit coverage now exercises the libhat scan parameters and the rewritten unique-scan tools
+- The live suite now covers:
+  - range-scoped libhat scans
+  - section-scoped scans against `.text`
+  - scoped `ce.aob_scan_unique`
+- The benchmark runner now measures the signature-heavy workflows directly:
+  - `ce.aob_scan(range,x16)`
+  - `ce.aob_scan_unique(range,x16)`
+  - `ce.scan_string(range,ascii)`
+  - `ce.aob_scan_module_unique(main module)`
+- Latest live benchmark against `Minecraft.Windows.exe`:
+  - `ce.aob_scan(range,x16)`: avg `0.27 ms`
+  - `ce.aob_scan_unique(range,x16)`: avg `0.28 ms`
+  - `ce.scan_string(range,ascii)`: avg `0.313 ms`
+  - `ce.aob_scan_module_unique(main module)`: avg `208.98 ms`
+- Full live suite against `Minecraft.Windows.exe` now completes in about `17.55s`
 
 ### Repository layout
 
 - Native CE plugin code lives under `native/`
 - Installable MCP backend lives under `python/src/ce_mcp_server/`
 - Dev-only operators and test runners live under `tools/dev/`
+- Vendored `libhat` lives under `native/vendor/libhat/`
 - The loader/core split remains:
   - `ce_mcp_plugin.dll`: stable Cheat Engine loader
   - `ce_mcp_plugin_core.dll`: hot-swappable runtime core
@@ -469,6 +468,19 @@ Search for a plain or wide string without hand-building AOB hex:
 ce.scan_string(text="inventory", encoding="both", module_name="Minecraft.Windows.exe")
 ```
 
+Run a libhat-backed signature scan with PE-section scoping and alignment controls:
+
+```text
+ce.aob_scan(
+  pattern="48 8D 0D ?? ?? ?? ?? E9 ?? ?? ?? ?? CC CC CC CC",
+  module_name="Minecraft.Windows.exe",
+  section_name=".text",
+  scan_alignment="x16",
+  scan_hint="x86_64",
+  max_results=4
+)
+```
+
 Run a one-shot typed value scan:
 
 ```text
@@ -566,12 +578,12 @@ npm exec --yes . -- --help
 
 Versioned Windows release bundles live under `releases/<version>/` in the tagged repo snapshot.
 
-For `v0.2.5`, use:
+For `v0.2.7`, use:
 
-- `releases/v0.2.5/ce_mcp_plugin.dll`
-- `releases/v0.2.5/ce_mcp_plugin_core.dll`
-- `releases/v0.2.5/cheat-engine-mcp-0.2.5-windows-x64.zip`
-- `releases/v0.2.5/SHA256SUMS.txt`
+- `releases/v0.2.7/ce_mcp_plugin.dll`
+- `releases/v0.2.7/ce_mcp_plugin_core.dll`
+- `releases/v0.2.7/cheat-engine-mcp-0.2.7-windows-x64.zip`
+- `releases/v0.2.7/SHA256SUMS.txt`
 
 Each release ZIP contains:
 
@@ -586,7 +598,7 @@ The core DLL is the hot-swapped backend module loaded by the loader.
 Prebuilt install guide:
 
 - [docs/INSTALL_PREBUILT_WINDOWS.md](docs/INSTALL_PREBUILT_WINDOWS.md)
-- [releases/v0.2.5/README.md](releases/v0.2.5/README.md)
+- [releases/v0.2.7/README.md](releases/v0.2.7/README.md)
 
 ## Development
 
@@ -634,6 +646,7 @@ The live suite expects:
 Latest Minecraft audit:
 
 - [docs/MINECRAFT_LIVE_AUDIT_2026-03-08.md](docs/MINECRAFT_LIVE_AUDIT_2026-03-08.md)
+- [docs/LIBHAT_SIGSCAN_REWRITE_2026-03-08.md](docs/LIBHAT_SIGSCAN_REWRITE_2026-03-08.md)
 
 ## Troubleshooting
 
@@ -650,6 +663,8 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for:
 Short version:
 
 - use `ce.aob_scan` for raw byte patterns
+- add `module_name`, `section_name`, or explicit `start_address` / `end_address` whenever you can
+- use `scan_alignment="x16"` for aligned code/data signatures when the target address is 16-byte aligned
 - use `ce.scan_string` for text
 - use `ce.scan_value` or `ce.scan_once` for CE memscan-style typed value scans
 

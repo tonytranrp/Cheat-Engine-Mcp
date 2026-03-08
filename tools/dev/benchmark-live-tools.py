@@ -174,6 +174,52 @@ def main() -> int:
                         end_address=suite.remote_scratch.base + suite.remote_scratch.size,
                     ),
                 ),
+                benchmark_iterations(
+                    "ce.aob_scan(range,x16)",
+                    args.iterations,
+                    lambda: call(
+                        "ce.aob_scan",
+                        pattern=suite.remote_scratch.pattern_hex,
+                        start_address=suite.remote_scratch.pattern_address,
+                        end_address=suite.remote_scratch.pattern_address + 0x40,
+                        scan_alignment="x16",
+                        scan_hint="pair0",
+                        max_results=2,
+                    ),
+                ),
+                benchmark_iterations(
+                    "ce.aob_scan_unique(range,x16)",
+                    args.iterations,
+                    lambda: call(
+                        "ce.aob_scan_unique",
+                        pattern=suite.remote_scratch.pattern_hex,
+                        start_address=suite.remote_scratch.pattern_address,
+                        end_address=suite.remote_scratch.pattern_address + 0x40,
+                        scan_alignment="x16",
+                        scan_hint="pair0",
+                    ),
+                ),
+                benchmark_iterations(
+                    "ce.scan_string(range,ascii)",
+                    args.iterations,
+                    lambda: call(
+                        "ce.scan_string",
+                        text="ce_mcp_inventory_ascii",
+                        encoding="ascii",
+                        case_sensitive=True,
+                        start_address=suite.remote_scratch.base,
+                        end_address=suite.remote_scratch.base + suite.remote_scratch.size,
+                    ),
+                ),
+                benchmark_iterations(
+                    "ce.aob_scan_module_unique(main module)",
+                    args.scan_iterations,
+                    lambda: call(
+                        "ce.aob_scan_module_unique",
+                        module_name=suite.primary_module_name,
+                        pattern="4D 5A 90 00 03 00 00 00 04 00 00 00 FF FF 00 00",
+                    ),
+                ),
                 benchmark_parallel(
                     "parallel_mixed_light",
                     args.parallel_calls,

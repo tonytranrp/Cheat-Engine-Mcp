@@ -290,7 +290,7 @@ class CheatEngineBridge:
                   payload: dict[str, Any] | None = None,
                   session_id: str | None = None,
                   timeout_seconds: float = 10.0) -> dict[str, Any]:
-        session = self._resolve_session(session_id)
+        session, redirected_from = self._resolve_session(session_id)
         response = session.call_tool(tool_name, payload=payload, timeout_seconds=timeout_seconds)
         result: dict[str, Any]
         if response.get("ok") is True:
@@ -303,6 +303,13 @@ class CheatEngineBridge:
 
         result.setdefault("session_id", session.info.session_id)
         result["bridge_session_id"] = session.info.session_id
+        if redirected_from is not None and redirected_from != session.info.session_id:
+            result["requested_session_id"] = redirected_from
+            result["session_redirected"] = True
+            result["session_redirect_reason"] = (
+                f"requested session '{redirected_from}' was not connected; "
+                f"using the only live session '{session.info.session_id}'"
+            )
         if session.info.ce_process_id is not None:
             result["ce_process_id"] = session.info.ce_process_id
         return result
@@ -352,19 +359,27 @@ class CheatEngineBridge:
             if current is not None and current.is_closed():
                 self._sessions.pop(session_id, None)
 
-    def _resolve_session(self, session_id: str | None) -> CheatEngineSession:
+    def resolve_session_id(self, session_id: str | None = None) -> str:
+        session, _ = self._resolve_session(session_id)
+        return session.info.session_id
+
+    def _resolve_session(self, session_id: str | None) -> tuple[CheatEngineSession, str | None]:
         with self._lock:
             if session_id is not None:
                 session = self._sessions.get(session_id)
-                if session is None:
-                    raise NoSessionError(f"session '{session_id}' is not connected")
-                return session
+                if session is not None:
+                    return session, None
+
+                if len(self._sessions) == 1:
+                    return next(iter(self._sessions.values())), session_id
+
+                raise NoSessionError(f"session '{session_id}' is not connected")
 
             if not self._sessions:
                 raise NoSessionError("no Cheat Engine session is connected")
 
             if len(self._sessions) == 1:
-                return next(iter(self._sessions.values()))
+                return next(iter(self._sessions.values())), None
 
             connected = sorted(self._sessions.values(), key=lambda item: item.info.connected_at, reverse=True)
-            return connected[0]
+            return connected[0], None

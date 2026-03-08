@@ -80,11 +80,11 @@ def error_payload(tool_name: str, exc: Exception) -> dict[str, Any]:
             ToolStateError(
                 str(exc),
                 code="no_session",
-                hint="Start Cheat Engine with the CE MCP loader enabled, then retry after the bridge reconnects.",
+                hint="If Cheat Engine reconnected under a new bridge session, omit session_id or refresh it from ce.list_sessions before retrying.",
                 next_steps=[
                     "Launch Cheat Engine with the CE MCP loader plugin enabled.",
                     "Wait for a live session to appear in ce.bridge_status or ce.list_sessions.",
-                    "Retry the original tool call.",
+                    "If a different session_id is now live, retry without session_id or use the new one.",
                 ],
             ),
         )
@@ -95,11 +95,11 @@ def error_payload(tool_name: str, exc: Exception) -> dict[str, Any]:
             ToolStateError(
                 str(exc),
                 code="tool_timeout",
-                hint="The target operation did not finish before the current tool timeout. Narrow the scope or use a staged call order.",
+                hint="The target operation did not finish before the current tool timeout. Narrow the scope, use a bounded range, or raise timeout_seconds on heavy tools.",
                 next_steps=[
                     "Reduce the scan/module/range size.",
                     "Prefer module_name or explicit address bounds over whole-process scans.",
-                    "Retry after the current long-running operation finishes.",
+                    "Retry with a larger timeout_seconds value on the specific tool when available.",
                 ],
             ),
         )

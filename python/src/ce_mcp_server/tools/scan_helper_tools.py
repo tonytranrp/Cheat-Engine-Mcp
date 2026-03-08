@@ -16,6 +16,8 @@ DEFAULT_START_ADDRESS = 0
 DEFAULT_END_ADDRESS = 0x7FFFFFFFFFFFFFFF
 DEFAULT_RESULT_LIMIT = 128
 MAX_RESULT_LIMIT = 4096
+DEFAULT_SCAN_TIMEOUT_SECONDS = 180.0
+DEFAULT_SCAN_STRING_TIMEOUT_SECONDS = 300.0
 
 SCAN_SESSION_PARAMETER = ParameterSpec("scan_session_id", str)
 SCAN_OPTION_PARAMETER = ParameterSpec("scan_option", str, "exact")
@@ -36,6 +38,8 @@ UNICODE_PARAMETER = ParameterSpec("is_unicode_scan", bool, False)
 CASE_PARAMETER = ParameterSpec("is_case_sensitive", bool, False)
 PERCENTAGE_PARAMETER = ParameterSpec("is_percentage_scan", bool, False)
 SAVED_RESULT_PARAMETER = ParameterSpec("saved_result_name", str | None, None)
+TIMEOUT_PARAMETER = ParameterSpec("timeout_seconds", float, DEFAULT_SCAN_TIMEOUT_SECONDS)
+STRING_TIMEOUT_PARAMETER = ParameterSpec("timeout_seconds", float, DEFAULT_SCAN_STRING_TIMEOUT_SECONDS)
 
 
 def _parse_integer(value: Any) -> int | None:
@@ -63,6 +67,18 @@ def _normalize_limit(limit: int) -> int:
             details={"minimum": 1, "maximum": MAX_RESULT_LIMIT, "received": limit},
         )
     return int(limit)
+
+
+def _normalize_timeout_seconds(timeout_seconds: float, *, default: float) -> float:
+    normalized = float(timeout_seconds)
+    if normalized <= 0.0:
+        raise ToolUsageError(
+            "timeout_seconds must be greater than zero",
+            code="invalid_timeout_seconds",
+            hint="Use a positive timeout in seconds for long-running scan operations.",
+            details={"received": timeout_seconds, "default": default},
+        )
+    return normalized
 
 
 def _runtime_call_strict(ctx: ToolContext,
@@ -341,7 +357,8 @@ def _run_one_shot_scan(ctx: ToolContext,
                        *,
                        session_id: str | None,
                        options: dict[str, Any],
-                       limit: int) -> dict[str, Any]:
+                       limit: int,
+                       timeout_seconds: float) -> dict[str, Any]:
     ce_session_id = ctx.resolve_session_id(session_id)
     created = _runtime_call_strict(
         ctx,
@@ -357,14 +374,14 @@ def _run_one_shot_scan(ctx: ToolContext,
             "first_scan",
             args=[scan_session_id, options],
             session_id=ce_session_id,
-            timeout_seconds=120.0,
+            timeout_seconds=timeout_seconds,
         )
         _runtime_call_strict(
             ctx,
             "wait",
             args=[scan_session_id],
             session_id=ce_session_id,
-            timeout_seconds=180.0,
+            timeout_seconds=timeout_seconds,
         )
         payload = _collect_scan_results(ctx, ce_session_id, scan_session_id, limit)
         payload["ce_session_id"] = ce_session_id
@@ -391,8 +408,10 @@ def _first_scan_handler(ctx: ToolContext,
                         is_not_binary_string: bool = False,
                         is_unicode_scan: bool = False,
                         is_case_sensitive: bool = False,
+                        timeout_seconds: float = DEFAULT_SCAN_TIMEOUT_SECONDS,
                         session_id: str | None = None) -> dict[str, Any]:
     ce_session_id = ctx.resolve_session_id(session_id)
+    timeout_seconds = _normalize_timeout_seconds(timeout_seconds, default=DEFAULT_SCAN_TIMEOUT_SECONDS)
     resolved_start, resolved_end, scope = _resolve_scope(
         ctx,
         ce_session_id,
@@ -421,7 +440,7 @@ def _first_scan_handler(ctx: ToolContext,
         "first_scan",
         args=[scan_session_id, options],
         session_id=ce_session_id,
-        timeout_seconds=120.0,
+        timeout_seconds=timeout_seconds,
     )
     return {
         "ok": True,
@@ -449,8 +468,10 @@ def _next_scan_handler(ctx: ToolContext,
                        is_case_sensitive: bool = False,
                        is_percentage_scan: bool = False,
                        saved_result_name: str | None = None,
+                       timeout_seconds: float = DEFAULT_SCAN_TIMEOUT_SECONDS,
                        session_id: str | None = None) -> dict[str, Any]:
     ce_session_id = ctx.resolve_session_id(session_id)
+    timeout_seconds = _normalize_timeout_seconds(timeout_seconds, default=DEFAULT_SCAN_TIMEOUT_SECONDS)
     state = _get_scan_session_state(ctx, ce_session_id, scan_session_id)
     if state["scan_in_progress"]:
         raise ToolStateError(
@@ -506,7 +527,7 @@ def _next_scan_handler(ctx: ToolContext,
         "next_scan",
         args=[scan_session_id, options],
         session_id=ce_session_id,
-        timeout_seconds=120.0,
+        timeout_seconds=timeout_seconds,
     )
     return {
         "ok": True,
@@ -524,8 +545,10 @@ def _scan_collect_handler(ctx: ToolContext,
                           *,
                           scan_session_id: str,
                           limit: int = DEFAULT_RESULT_LIMIT,
+                          timeout_seconds: float = DEFAULT_SCAN_TIMEOUT_SECONDS,
                           session_id: str | None = None) -> dict[str, Any]:
     ce_session_id = ctx.resolve_session_id(session_id)
+    _normalize_timeout_seconds(timeout_seconds, default=DEFAULT_SCAN_TIMEOUT_SECONDS)
     state = _get_scan_session_state(ctx, ce_session_id, scan_session_id)
     if state["scan_in_progress"]:
         raise ToolStateError(
@@ -568,8 +591,10 @@ def _scan_once_handler(ctx: ToolContext,
                        is_not_binary_string: bool = False,
                        is_unicode_scan: bool = False,
                        is_case_sensitive: bool = False,
+                       timeout_seconds: float = DEFAULT_SCAN_TIMEOUT_SECONDS,
                        session_id: str | None = None) -> dict[str, Any]:
     ce_session_id = ctx.resolve_session_id(session_id)
+    timeout_seconds = _normalize_timeout_seconds(timeout_seconds, default=DEFAULT_SCAN_TIMEOUT_SECONDS)
     resolved_start, resolved_end, scope = _resolve_scope(
         ctx,
         ce_session_id,
@@ -593,7 +618,7 @@ def _scan_once_handler(ctx: ToolContext,
         is_unicode_scan=is_unicode_scan,
         is_case_sensitive=is_case_sensitive,
     )
-    payload = _run_one_shot_scan(ctx, session_id=ce_session_id, options=options, limit=limit)
+    payload = _run_one_shot_scan(ctx, session_id=ce_session_id, options=options, limit=limit, timeout_seconds=timeout_seconds)
     payload.update(
         {
             "ok": True,
@@ -625,6 +650,7 @@ def _scan_value_handler(ctx: ToolContext,
                         is_not_binary_string: bool = False,
                         is_unicode_scan: bool = False,
                         is_case_sensitive: bool = False,
+                        timeout_seconds: float = DEFAULT_SCAN_TIMEOUT_SECONDS,
                         session_id: str | None = None) -> dict[str, Any]:
     return _scan_once_handler(
         ctx,
@@ -644,6 +670,7 @@ def _scan_value_handler(ctx: ToolContext,
         is_not_binary_string=is_not_binary_string,
         is_unicode_scan=is_unicode_scan,
         is_case_sensitive=is_case_sensitive,
+        timeout_seconds=timeout_seconds,
         session_id=session_id,
     )
 
@@ -681,8 +708,82 @@ def _merge_string_scan_results(payloads: list[dict[str, Any]], limit: int) -> di
     }
 
 
+def _string_to_aob_pattern(text: str, encoding: str) -> str | None:
+    try:
+        if encoding == "ascii":
+            raw = text.encode("latin-1")
+        else:
+            raw = text.encode("utf-16le")
+    except UnicodeEncodeError:
+        return None
+
+    if not raw:
+        return None
+    return " ".join(f"{byte:02X}" for byte in raw)
+
+
+def _scan_string_exact_via_aob(ctx: ToolContext,
+                               *,
+                               ce_session_id: str,
+                               text: str,
+                               encoding: str,
+                               module_name: str | None,
+                               start_address: int | str | None,
+                               end_address: int | str | None,
+                               limit: int,
+                               timeout_seconds: float) -> dict[str, Any] | None:
+    if module_name is None and start_address is None and end_address is None:
+        return None
+
+    pattern = _string_to_aob_pattern(text, encoding)
+    if pattern is None:
+        return None
+
+    payload: dict[str, Any] = {
+        "pattern": pattern,
+        "max_results": limit,
+    }
+    if module_name is not None:
+        payload["module_name"] = module_name
+    if start_address is not None:
+        payload["start_address"] = start_address
+    if end_address is not None:
+        payload["end_address"] = end_address
+
+    result = ctx.native_call_safe(
+        "ce.aob_scan",
+        payload=payload,
+        session_id=ce_session_id,
+        timeout_seconds=timeout_seconds,
+    )
+    if result.get("ok") is not True:
+        raise BridgeError(str(result.get("error", "exact string AOB scan failed")))
+
+    matches = [match for match in result.get("matches", []) if isinstance(match, int)]
+    normalized_results = [
+        {
+            "address": address,
+            "address_hex": hex(address),
+            "value": text,
+            "text": text,
+            "encoding": encoding,
+        }
+        for address in matches[:limit]
+    ]
+    return {
+        "ok": True,
+        "ce_session_id": str(result.get("session_id", ce_session_id)),
+        "count": len(matches),
+        "returned_count": len(normalized_results),
+        "truncated": bool(result.get("truncated", False)),
+        "results": normalized_results,
+        "strategy": "native_exact_aob",
+    }
+
+
 def _scan_string_single(ctx: ToolContext,
                         *,
+                        ce_session_id: str,
                         text: str,
                         encoding: str,
                         case_sensitive: bool,
@@ -691,7 +792,7 @@ def _scan_string_single(ctx: ToolContext,
                         end_address: int | str | None,
                         limit: int,
                         protection_flags: str,
-                        session_id: str | None) -> dict[str, Any]:
+                        timeout_seconds: float) -> dict[str, Any]:
     payload = _scan_once_handler(
         ctx,
         scan_option="exact",
@@ -709,7 +810,8 @@ def _scan_string_single(ctx: ToolContext,
         is_not_binary_string=False,
         is_unicode_scan=(encoding == "utf16"),
         is_case_sensitive=case_sensitive,
-        session_id=session_id,
+        timeout_seconds=timeout_seconds,
+        session_id=ce_session_id,
     )
     for entry in payload.get("results", []):
         if isinstance(entry, dict):
@@ -728,6 +830,7 @@ def _scan_string_handler(ctx: ToolContext,
                          end_address: int | str | None = None,
                          limit: int = DEFAULT_RESULT_LIMIT,
                          protection_flags: str = DEFAULT_PROTECTION_FLAGS,
+                         timeout_seconds: float = DEFAULT_SCAN_STRING_TIMEOUT_SECONDS,
                          session_id: str | None = None) -> dict[str, Any]:
     normalized_encoding = encoding.strip().casefold()
     if normalized_encoding not in {"ascii", "ansi", "utf16", "utf-16", "wide", "unicode", "both"}:
@@ -740,6 +843,8 @@ def _scan_string_handler(ctx: ToolContext,
         )
 
     limit = _normalize_limit(limit)
+    timeout_seconds = _normalize_timeout_seconds(timeout_seconds, default=DEFAULT_SCAN_STRING_TIMEOUT_SECONDS)
+    ce_session_id = ctx.resolve_session_id(session_id)
     encodings: list[str]
     if normalized_encoding in {"ascii", "ansi"}:
         encodings = ["ascii"]
@@ -749,8 +854,28 @@ def _scan_string_handler(ctx: ToolContext,
         encodings = ["ascii", "utf16"]
 
     payloads = [
-        _scan_string_single(
+        _scan_string_exact_via_aob(
             ctx,
+            ce_session_id=ce_session_id,
+            text=text,
+            encoding=current,
+            module_name=module_name,
+            start_address=start_address,
+            end_address=end_address,
+            limit=limit,
+            timeout_seconds=timeout_seconds,
+        )
+        for current in encodings
+    ]
+    resolved_payloads: list[dict[str, Any]] = []
+    for current, exact_payload in zip(encodings, payloads):
+        if exact_payload is not None and (case_sensitive or exact_payload.get("returned_count", 0)):
+            resolved_payloads.append(exact_payload)
+            continue
+
+        runtime_payload = _scan_string_single(
+            ctx,
+            ce_session_id=ce_session_id,
             text=text,
             encoding=current,
             case_sensitive=case_sensitive,
@@ -759,13 +884,18 @@ def _scan_string_handler(ctx: ToolContext,
             end_address=end_address,
             limit=limit,
             protection_flags=protection_flags,
-            session_id=session_id,
+            timeout_seconds=timeout_seconds,
         )
-        for current in encodings
-    ]
-    merged = _merge_string_scan_results(payloads, limit)
+        runtime_payload["strategy"] = "scan_runtime_string"
+        resolved_payloads.append(runtime_payload)
+    merged = _merge_string_scan_results(resolved_payloads, limit)
     merged["text"] = text
     merged["encodings"] = encodings
+    merged["strategy"] = (
+        "native_exact_aob"
+        if resolved_payloads and all(payload.get("strategy") == "native_exact_aob" for payload in resolved_payloads)
+        else "scan_runtime_string"
+    )
     return merged
 
 
@@ -791,6 +921,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 NOT_BINARY_PARAMETER,
                 UNICODE_PARAMETER,
                 CASE_PARAMETER,
+                TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
             handler=lambda **kwargs: _first_scan_handler(ctx, **kwargs),
@@ -810,6 +941,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 CASE_PARAMETER,
                 PERCENTAGE_PARAMETER,
                 SAVED_RESULT_PARAMETER,
+                TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
             handler=lambda **kwargs: _next_scan_handler(ctx, **kwargs),
@@ -820,6 +952,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
             parameters=(
                 SCAN_SESSION_PARAMETER,
                 LIMIT_PARAMETER,
+                TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
             handler=lambda **kwargs: _scan_collect_handler(ctx, **kwargs),
@@ -844,6 +977,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 NOT_BINARY_PARAMETER,
                 UNICODE_PARAMETER,
                 CASE_PARAMETER,
+                TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
             handler=lambda **kwargs: _scan_once_handler(ctx, **kwargs),
@@ -868,6 +1002,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 NOT_BINARY_PARAMETER,
                 UNICODE_PARAMETER,
                 CASE_PARAMETER,
+                TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
             handler=lambda **kwargs: _scan_value_handler(ctx, **kwargs),
@@ -884,6 +1019,7 @@ def register(server: FastMCP, ctx: ToolContext) -> None:
                 END_ADDRESS_PARAMETER,
                 LIMIT_PARAMETER,
                 PROTECTION_PARAMETER,
+                STRING_TIMEOUT_PARAMETER,
                 ParameterSpec("session_id", str | None, None),
             ),
             handler=lambda **kwargs: _scan_string_handler(ctx, **kwargs),
